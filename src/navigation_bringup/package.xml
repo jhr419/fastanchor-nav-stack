@@ -11,6 +11,8 @@
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
   <exec_depend>nav3d_global_planning</exec_depend>
+  <exec_depend>pct_global_planner</exec_depend>
+  <exec_depend>rviz2</exec_depend>
   <exec_depend>scan_planner</exec_depend>
 
   <export>

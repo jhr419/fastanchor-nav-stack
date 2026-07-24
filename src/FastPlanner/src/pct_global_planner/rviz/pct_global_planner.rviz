@@ -35,10 +35,10 @@ Visualization Manager:
         Durability Policy: Transient Local
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /global_points
+        Value: /fast_anchor/global_map
       Value: true
     - Class: rviz_default_plugins/PointCloud2
-      Enabled: true
+      Enabled: false
       Name: Tomogram
       Size (Pixels): 2
       Style: Points
@@ -48,7 +48,7 @@ Visualization Manager:
         History Policy: Keep Last
         Reliability Policy: Reliable
         Value: /tomogram
-      Value: true
+      Value: false
     - Class: rviz_default_plugins/Path
       Color: 25; 255; 0
       Enabled: true
@@ -74,73 +74,33 @@ Visualization Manager:
       Value: true
     - Class: rviz_default_plugins/Marker
       Enabled: true
-      Name: EGO Local Trajectory
+      Name: A* Expanded Nodes
       Topic:
         Depth: 5
-        Durability Policy: Volatile
+        Durability Policy: Transient Local
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /ego_local_trajectory_marker
+        Value: /astar_expanded_nodes_marker
       Value: true
     - Class: rviz_default_plugins/MarkerArray
       Enabled: true
-      Name: EGO Candidate Trajectories
+      Name: A* Path Clearance
       Topic:
         Depth: 5
-        Durability Policy: Volatile
+        Durability Policy: Transient Local
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /ego_candidate_trajectories_marker
+        Value: /astar_clearance_marker
       Value: true
     - Class: rviz_default_plugins/Marker
       Enabled: true
-      Name: EGO Local Target
+      Name: A* Closed Set
       Topic:
         Depth: 5
-        Durability Policy: Volatile
+        Durability Policy: Transient Local
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /ego_local_target_marker
-      Value: true
-    - Class: rviz_default_plugins/Marker
-      Enabled: true
-      Name: EGO Local Map
-      Topic:
-        Depth: 5
-        Durability Policy: Volatile
-        History Policy: Keep Last
-        Reliability Policy: Reliable
-        Value: /ego_local_map_marker
-      Value: true
-    - Class: rviz_default_plugins/Marker
-      Enabled: true
-      Name: EGO Collision Points
-      Topic:
-        Depth: 5
-        Durability Policy: Volatile
-        History Policy: Keep Last
-        Reliability Policy: Reliable
-        Value: /ego_collision_points_marker
-      Value: true
-    - Class: rviz_default_plugins/Marker
-      Enabled: true
-      Name: EGO Footprint
-      Topic:
-        Depth: 5
-        Durability Policy: Volatile
-        History Policy: Keep Last
-        Reliability Policy: Reliable
-        Value: /ego_footprint_marker
-      Value: true
-    - Class: rviz_default_plugins/Marker
-      Enabled: true
-      Name: EGO Cmd Vel
-      Topic:
-        Depth: 5
-        Durability Policy: Volatile
-        History Policy: Keep Last
-        Reliability Policy: Reliable
-        Value: /ego_cmd_vel_marker
+        Value: /astar_closed_set_marker
       Value: true
     - Class: rviz_default_plugins/Marker
       Enabled: true
@@ -155,8 +115,8 @@ Visualization Manager:
     - Class: rviz_default_plugins/InteractiveMarkers
       Enable Transparency: true
       Enabled: true
-      Interactive Markers Namespace: pct_start_goal_marker
-      Name: PCT Start/Goal Markers
+      Interactive Markers Namespace: /scan_planner_pose_markers
+      Name: Initial/Goal Markers
       Show Axes: true
       Show Descriptions: true
       Show Visual Aids: true

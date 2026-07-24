@@ -93,7 +93,7 @@ def generate_launch_description():
         DeclareLaunchArgument("start_livox_driver", default_value="true"),
         DeclareLaunchArgument(
             "lidar_model",
-            default_value="mid360",
+            default_value="mid360s",
             choices=list(LIVOX_LAUNCH_FILES),
             description="Livox LiDAR model used to select the driver launch file",
         ),

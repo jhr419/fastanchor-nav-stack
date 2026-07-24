@@ -230,7 +230,7 @@ Visualization Manager:
         Filter size: 10
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /Odometry
+        Value: /fast_anchor/odom
       Value: true
     - Class: rviz_default_plugins/InteractiveMarkers
       Enable Transparency: true

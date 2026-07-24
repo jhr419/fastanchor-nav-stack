@@ -21,6 +21,7 @@ def generate_launch_description():
     initial_pose_topic = LaunchConfiguration("initial_pose_topic")
     goal_topic = LaunchConfiguration("goal_topic")
     global_path_topic = LaunchConfiguration("global_path_topic")
+    local_target_distance = LaunchConfiguration("local_target_distance")
     cmd_vel_topic = LaunchConfiguration("cmd_vel_topic")
 
     fast_anchor_launch = PathJoinSubstitution([
@@ -38,6 +39,16 @@ def generate_launch_description():
         "config",
         "astar_global_planner.yaml",
     ])
+    global_planner_rviz_config = PathJoinSubstitution([
+        FindPackageShare("pct_global_planner"),
+        "rviz",
+        "pct_global_planner.rviz",
+    ])
+    local_planner_rviz_config = PathJoinSubstitution([
+        FindPackageShare("scan_planner"),
+        "rviz",
+        "default.rviz",
+    ])
 
     return LaunchDescription([
         DeclareLaunchArgument("map_pcd_path", description="PCD map used by localization and global planning"),
@@ -50,12 +61,25 @@ def generate_launch_description():
         DeclareLaunchArgument("initial_pose_topic", default_value="/initialpose"),
         DeclareLaunchArgument("goal_topic", default_value="/move_base_simple/goal"),
         DeclareLaunchArgument("global_path_topic", default_value="/planned_path"),
+        DeclareLaunchArgument(
+            "local_target_distance",
+            default_value="4.0",
+            description="Distance from the robot to the SCAN local target in metres",
+        ),
         DeclareLaunchArgument("cmd_vel_topic", default_value="/cmd_vel"),
         DeclareLaunchArgument("controller_mode", default_value="closed_loop"),
-        DeclareLaunchArgument("lidar_model", default_value="mid360"),
+        DeclareLaunchArgument(
+            "lidar_model",
+            default_value="mid360s",
+            choices=["mid360", "mid360s"],
+            description="Livox LiDAR model: mid360 or mid360s",
+        ),
         DeclareLaunchArgument("start_localization", default_value="true"),
         DeclareLaunchArgument("start_livox_driver", default_value="true"),
         DeclareLaunchArgument("start_fastlio", default_value="true"),
+        DeclareLaunchArgument("start_localization_rviz", default_value="true"),
+        DeclareLaunchArgument("start_global_planner_rviz", default_value="false"),
+        DeclareLaunchArgument("start_local_planner_rviz", default_value="true"),
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(fast_anchor_launch),
             condition=IfCondition(LaunchConfiguration("start_localization")),
@@ -74,7 +98,7 @@ def generate_launch_description():
                 "start_livox_driver": LaunchConfiguration("start_livox_driver"),
                 "start_fastlio": LaunchConfiguration("start_fastlio"),
                 "start_fastlio_rviz": "false",
-                "rviz": "false",
+                "rviz": LaunchConfiguration("start_localization_rviz"),
             }.items(),
         ),
         Node(
@@ -105,6 +129,14 @@ def generate_launch_description():
                 },
             ],
         ),
+        Node(
+            package="rviz2",
+            executable="rviz2",
+            name="global_planner_rviz2",
+            output="screen",
+            arguments=["-d", global_planner_rviz_config, "-f", map_frame],
+            condition=IfCondition(LaunchConfiguration("start_global_planner_rviz")),
+        ),
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(scan_planner_launch),
             launch_arguments={
@@ -120,9 +152,18 @@ def generate_launch_description():
                 "initial_pose_topic": initial_pose_topic,
                 "goal_topic": goal_topic,
                 "global_path_topic": global_path_topic,
+                "local_target_distance": local_target_distance,
                 "reference_path_topic": "/scan_planner/manual_reference_path",
                 "publish_marker_reference_path": "false",
                 "use_sim_time": use_sim_time,
             }.items(),
+        ),
+        Node(
+            package="rviz2",
+            executable="rviz2",
+            name="local_planner_rviz2",
+            output="screen",
+            arguments=["-d", local_planner_rviz_config, "-f", map_frame],
+            condition=IfCondition(LaunchConfiguration("start_local_planner_rviz")),
         ),
     ])

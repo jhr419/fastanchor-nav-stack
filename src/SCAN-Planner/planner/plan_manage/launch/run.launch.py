@@ -87,6 +87,11 @@ def _setup(context):
     goal_topic = LaunchConfiguration("goal_topic").perform(context)
     global_path_topic = LaunchConfiguration("global_path_topic").perform(context)
     reference_path_topic = LaunchConfiguration("reference_path_topic").perform(context)
+    local_target_distance = float(
+        LaunchConfiguration("local_target_distance").perform(context)
+    )
+    if local_target_distance <= 0.0:
+        raise RuntimeError("local_target_distance must be greater than zero")
     publish_marker_reference_path = _as_bool(
         LaunchConfiguration("publish_marker_reference_path").perform(context)
     )
@@ -96,6 +101,7 @@ def _setup(context):
         **common,
         **intrinsics,
         "fsm.navi_mode": navi_mode,
+        "fsm.planning_horizon": local_target_distance,
         "grid_map.sensor_type": sensor_type,
         "grid_map.cloud_is_world": cloud_is_world,
         "grid_map.need_extrinsic": need_extrinsic,
@@ -257,6 +263,7 @@ def generate_launch_description():
             DeclareLaunchArgument("initial_pose_topic", default_value="/initialpose"),
             DeclareLaunchArgument("goal_topic", default_value="/move_base_simple/goal"),
             DeclareLaunchArgument("global_path_topic", default_value="/initial_path"),
+            DeclareLaunchArgument("local_target_distance", default_value="4.0"),
             DeclareLaunchArgument("reference_path_topic", default_value="/initial_path"),
             DeclareLaunchArgument("publish_marker_reference_path", default_value="true"),
             DeclareLaunchArgument("keypoints_file", default_value=""),

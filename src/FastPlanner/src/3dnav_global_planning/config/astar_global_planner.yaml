@@ -59,7 +59,7 @@ astar_global_planner_node:
 
     robot_height_min: 0.05
     robot_height_max: 0.70
-    obstacle_min_relative_z: 0.20
+    obstacle_min_relative_z: 0.40
     obstacle_max_relative_z: 1.40
     terrain_following_enabled: false
     default_path_z: 0.0
