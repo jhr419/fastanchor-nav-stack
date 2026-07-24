@@ -1,0 +1,4 @@
+bool reset_to_initial_pose
+---
+bool success
+string message

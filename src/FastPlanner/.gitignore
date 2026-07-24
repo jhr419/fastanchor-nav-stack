@@ -1,0 +1,10 @@
+/build/
+/install/
+/log/
+/debug/feasibility/*.yaml
+/debug/feasibility/*.csv
+/debug/native_pct/
+**/__pycache__/
+*.pyc
+*.core
+core

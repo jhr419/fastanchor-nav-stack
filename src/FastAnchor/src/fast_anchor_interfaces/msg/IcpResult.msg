@@ -1,0 +1,5 @@
+std_msgs/Header header
+bool converged
+float64 fitness_score
+geometry_msgs/PoseWithCovarianceStamped corrected_pose
+geometry_msgs/TransformStamped map_to_odom

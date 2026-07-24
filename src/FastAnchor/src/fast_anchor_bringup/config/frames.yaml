@@ -1,0 +1,10 @@
+fast_anchor_localization_node:
+  ros__parameters:
+    frames:
+      map_frame: "map"
+      odom_frame: "camera_init"
+      base_frame: "base_link"
+      lidar_frame: "livox_frame"
+    publish_tf: true
+    publish_base_tf: true
+    odom_coincident_with_base: false

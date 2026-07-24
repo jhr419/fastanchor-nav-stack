@@ -1,0 +1,8 @@
+pcd_tools:
+  input: "maps/input.pcd"
+  output: "maps/output.pcd"
+  voxel_leaf_size: 0.2
+  crop_min: [-50.0, -50.0, -5.0]
+  crop_max: [50.0, 50.0, 5.0]
+  transform_xyz: [0.0, 0.0, 0.0]
+  transform_rpy: [0.0, 0.0, 0.0]

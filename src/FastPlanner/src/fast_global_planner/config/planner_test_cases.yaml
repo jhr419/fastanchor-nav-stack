@@ -1,0 +1,8 @@
+test_cases:
+  - name: "simple_test"
+    start: [0.0, 0.0, 0.0]
+    goal: [0.0, 2.69, 0.0]
+
+  - name: "building_ground_test"
+    start: [0.0, 2.69, 0.0]
+    goal: [5.0, 13.06, 0.0]

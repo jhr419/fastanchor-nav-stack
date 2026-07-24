@@ -1,0 +1,10 @@
+fast_anchor:
+  livox_launch: "launch_ROS2/msg_MID360_launch.py"
+  fast_lio_launch: "launch/mapping.launch.py"
+  fast_lio_config_file: "mid360_localization.yaml"
+  fast_lio_lidar_topic: "/livox/lidar"
+  fast_lio_imu_topic: "/livox/imu"
+  fast_lio_lidar_type: "1"
+  static_base_to_livox:
+    xyz: [0.3, 0.0, 0.38]
+    rpy: [-0.034101, 0.566395, 0.0]

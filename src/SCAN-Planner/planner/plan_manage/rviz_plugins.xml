@@ -1,0 +1,14 @@
+<library path="scan_planner_rviz_tools">
+  <class
+    name="scan_planner/PublishInitialPose"
+    type="scan_planner::PublishInitialPoseTool"
+    base_class_type="rviz_common::Tool">
+    <description>Publish the current localization interactive marker pose on /initialpose.</description>
+  </class>
+  <class
+    name="scan_planner/PublishGoalPose"
+    type="scan_planner::PublishGoalPoseTool"
+    base_class_type="rviz_common::Tool">
+    <description>Publish the current SCAN-Planner goal interactive marker pose.</description>
+  </class>
+</library>

@@ -1,0 +1,79 @@
+fast_anchor_localization_node:
+  ros__parameters:
+    map_pcd_path: "maps/map_preprocessed.pcd"
+    visualization_map_pcd_path: "maps/map_visualization.pcd"
+    icp_map_pcd_path: "maps/map_preprocessed.pcd"
+
+    frames:
+      map_frame: "map"
+      # The bundled FAST-LIO publishes /Odometry in camera_init.
+      odom_frame: "camera_init"
+      base_frame: "base_link"
+      lidar_frame: "livox_frame"
+
+    topics:
+      fast_lio_odom: "/Odometry"
+      fast_lio_cloud: "/cloud_registered_body"
+      initial_pose: "/initialpose"
+      output_pose: "/fast_anchor/pose"
+      output_odom: "/fast_anchor/odom"
+      output_path: "/fast_anchor/path"
+      output_status: "/fast_anchor/status"
+      icp_result: "/fast_anchor/icp_result"
+      aligned_cloud: "/fast_anchor/aligned_cloud"
+      local_map: "/fast_anchor/local_map"
+      global_map: "/fast_anchor/global_map"
+
+    publish_tf: true
+    # FAST-LIO owns camera_init -> body; FastAnchor additionally provides the
+    # calibrated camera_init -> base_link transform.
+    publish_base_tf: true
+    odom_coincident_with_base: false
+    publish_map_cloud: true
+
+    base_to_body_xyz: [-0.3, 0.0, -0.2]
+    base_to_body_rpy: [0.0, 0.0, 0.0]
+
+    use_initial_pose_param: false
+    initial_pose_xyz: [5.93438, 5.90442, 0.0]
+    initial_pose_rpy: [0.0, 0.0, 0.0]
+
+    cloud_preprocess:
+      voxel_leaf_size: 0.25
+      min_range: 0.5
+      max_range: 60.0
+      enable_height_filter: true
+      min_z: -0.2
+      max_z: 3.0
+
+    map:
+      pcd_path: "maps/map_preprocessed.pcd"
+      visualization_pcd_path: "maps/map_visualization.pcd"
+      icp_pcd_path: "maps/map_preprocessed.pcd"
+      frame_id: "map"
+      voxel_leaf_size: 0.25
+      publish_global_map: true
+      publish_local_map: true
+      local_map_radius: 30.0
+
+    min_scan_points: 120
+
+    icp:
+      max_iterations: 40
+      max_correspondence_distance: 2.0
+      transformation_epsilon: 0.01
+      euclidean_fitness_epsilon: 0.01
+      fitness_score_threshold: 2.0
+      relocalization_interval_s: 0.2
+
+    pose_fusion:
+      smooth_correction: false
+      correction_alpha: 1.0
+      max_translation_jump: 0.0
+      max_rotation_jump_deg: 0.0
+      reject_bad_icp_result: true
+
+    debug:
+      publish_aligned_cloud: true
+      publish_local_map: true
+      print_icp_score: true

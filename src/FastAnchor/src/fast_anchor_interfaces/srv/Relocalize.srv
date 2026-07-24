@@ -1,0 +1,5 @@
+geometry_msgs/PoseWithCovarianceStamped initial_pose
+---
+bool success
+string message
+float64 fitness_score

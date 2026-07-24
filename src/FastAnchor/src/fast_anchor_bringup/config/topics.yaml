@@ -1,0 +1,14 @@
+fast_anchor_localization_node:
+  ros__parameters:
+    topics:
+      fast_lio_odom: "/Odometry"
+      fast_lio_cloud: "/cloud_registered_body"
+      initial_pose: "/initialpose"
+      output_pose: "/fast_anchor/pose"
+      output_odom: "/fast_anchor/odom"
+      output_path: "/fast_anchor/path"
+      output_status: "/fast_anchor/status"
+      icp_result: "/fast_anchor/icp_result"
+      aligned_cloud: "/fast_anchor/aligned_cloud"
+      local_map: "/fast_anchor/local_map"
+      global_map: "/fast_anchor/global_map"

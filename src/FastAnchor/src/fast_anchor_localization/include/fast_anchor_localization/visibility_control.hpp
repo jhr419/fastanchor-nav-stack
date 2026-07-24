@@ -1,0 +1,32 @@
+#ifndef FAST_ANCHOR_LOCALIZATION__VISIBILITY_CONTROL_HPP_
+#define FAST_ANCHOR_LOCALIZATION__VISIBILITY_CONTROL_HPP_
+
+#if defined _WIN32 || defined __CYGWIN__
+  #ifdef __GNUC__
+    #define FAST_ANCHOR_LOCALIZATION_EXPORT __attribute__ ((dllexport))
+    #define FAST_ANCHOR_LOCALIZATION_IMPORT __attribute__ ((dllimport))
+  #else
+    #define FAST_ANCHOR_LOCALIZATION_EXPORT __declspec(dllexport)
+    #define FAST_ANCHOR_LOCALIZATION_IMPORT __declspec(dllimport)
+  #endif
+  #ifdef FAST_ANCHOR_LOCALIZATION_BUILDING_LIBRARY
+    #define FAST_ANCHOR_LOCALIZATION_PUBLIC FAST_ANCHOR_LOCALIZATION_EXPORT
+  #else
+    #define FAST_ANCHOR_LOCALIZATION_PUBLIC FAST_ANCHOR_LOCALIZATION_IMPORT
+  #endif
+  #define FAST_ANCHOR_LOCALIZATION_PUBLIC_TYPE FAST_ANCHOR_LOCALIZATION_PUBLIC
+  #define FAST_ANCHOR_LOCALIZATION_LOCAL
+#else
+  #define FAST_ANCHOR_LOCALIZATION_EXPORT __attribute__ ((visibility("default")))
+  #define FAST_ANCHOR_LOCALIZATION_IMPORT
+  #if __GNUC__ >= 4
+    #define FAST_ANCHOR_LOCALIZATION_PUBLIC __attribute__ ((visibility("default")))
+    #define FAST_ANCHOR_LOCALIZATION_LOCAL  __attribute__ ((visibility("hidden")))
+  #else
+    #define FAST_ANCHOR_LOCALIZATION_PUBLIC
+    #define FAST_ANCHOR_LOCALIZATION_LOCAL
+  #endif
+  #define FAST_ANCHOR_LOCALIZATION_PUBLIC_TYPE
+#endif
+
+#endif  // FAST_ANCHOR_LOCALIZATION__VISIBILITY_CONTROL_HPP_
