@@ -9,6 +9,7 @@ from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 
 
@@ -64,6 +65,8 @@ def generate_launch_description():
     initial_pose_topic = LaunchConfiguration("initial_pose_topic")
     output_odom_topic = LaunchConfiguration("output_odom_topic")
     aligned_cloud_topic = LaunchConfiguration("aligned_cloud_topic")
+    aligned_cloud_interval_s = LaunchConfiguration("aligned_cloud_interval_s")
+    path_publish_interval_s = LaunchConfiguration("path_publish_interval_s")
 
     default_config = PathJoinSubstitution([
         FindPackageShare("fast_anchor_bringup"),
@@ -90,6 +93,16 @@ def generate_launch_description():
         DeclareLaunchArgument("initial_pose_topic", default_value="/initialpose"),
         DeclareLaunchArgument("output_odom_topic", default_value="/fast_anchor/odom"),
         DeclareLaunchArgument("aligned_cloud_topic", default_value="/fast_anchor/aligned_cloud"),
+        DeclareLaunchArgument(
+            "aligned_cloud_interval_s",
+            default_value="0.2",
+            description="Minimum aligned-cloud period; 0 publishes every input scan",
+        ),
+        DeclareLaunchArgument(
+            "path_publish_interval_s",
+            default_value="0.5",
+            description="Minimum full localization-path publication period",
+        ),
         DeclareLaunchArgument("start_livox_driver", default_value="true"),
         DeclareLaunchArgument(
             "lidar_model",
@@ -168,6 +181,12 @@ def generate_launch_description():
                     "topics.initial_pose": initial_pose_topic,
                     "topics.output_odom": output_odom_topic,
                     "topics.aligned_cloud": aligned_cloud_topic,
+                    "output.aligned_cloud_interval_s": ParameterValue(
+                        aligned_cloud_interval_s, value_type=float
+                    ),
+                    "output.path_publish_interval_s": ParameterValue(
+                        path_publish_interval_s, value_type=float
+                    ),
                 },
             ],
         ),

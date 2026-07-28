@@ -23,10 +23,11 @@ ros2 launch navigation_bringup navigation_system.launch.py \
   map_pcd_path:=$PWD/maps/map_preprocessed2.pcd
 ```
 
-Localization and SCAN-Planner RViz windows are enabled by default. The redundant
-FastPlanner debug RViz is disabled by default and can be enabled with
-`start_global_planner_rviz:=true`. The other windows can be disabled with
-`start_localization_rviz:=false` or `start_local_planner_rviz:=false`.
+The integrated launch is headless by default on this performance branch: all
+three RViz processes are disabled so onboard visualization cannot consume the
+navigation CPU budget. Enable only the views needed for debugging with
+`start_localization_rviz:=true`, `start_local_planner_rviz:=true`, or
+`start_global_planner_rviz:=true`.
 
 SCAN-Planner selects its local target 4.0 m ahead of the robot by default, inside
 the 5.0 m local sensing range. Override it when needed with
@@ -50,6 +51,37 @@ ros2 launch navigation_bringup navigation_system.launch.py \
 The default frames are `map -> odom -> base_link`. The launch arguments
 `localization_pose_topic`, `goal_topic`, `global_path_topic`, and `cmd_vel_topic`
 only change interface names and do not alter planner behavior.
+
+## CPU-optimized runtime
+
+The optimized defaults preserve 5 Hz ICP, 20 Hz occupancy fusion, and 100 Hz
+control. They reduce non-critical work as follows:
+
+- FastAnchor preprocesses/publishes the aligned cloud at 5 Hz instead of every
+  LiDAR frame, publishes the full path at 2 Hz, and serializes each static map
+  only once after a subscriber appears.
+- SCAN publishes occupancy visualization at 5 Hz. Its two visualization layers
+  share one voxel traversal and serialization runs on a dedicated worker thread,
+  allowing Linux to schedule visualization and planning on different CPU cores.
+- RViz is opt-in. On a fully headless platform, pass
+  `grid_visualization_rate_hz:=0` to remove the remaining grid visualization work.
+
+Restore the previous diagnostic rates without reverting code:
+
+```bash
+ros2 launch navigation_bringup navigation_system.launch.py \
+  map_pcd_path:=$PWD/maps/map_preprocessed2.pcd \
+  aligned_cloud_interval_s:=0.0 \
+  path_publish_interval_s:=0.0 \
+  grid_visualization_rate_hz:=20.0 \
+  start_localization_rviz:=true \
+  start_local_planner_rviz:=true
+```
+
+For an onboard before/after measurement, run
+`bash scripts/profile_navigation_cpu.sh 60` while following the same route and
+using the same map and sensor rates. See `docs/performance.md` for the acceptance
+method and limitations of the current workstation-only validation.
 
 ## Data flow
 

@@ -58,6 +58,13 @@ fast_anchor_localization_node:
 
     min_scan_points: 120
 
+    # The planner consumes this cloud; 5 Hz is sufficient for the current
+    # 0.75 m/s speed limit and avoids preprocessing LiDAR frames that ICP will
+    # not use. Set to 0.0 to restore publication at the sensor input rate.
+    output:
+      aligned_cloud_interval_s: 0.2
+      path_publish_interval_s: 0.5
+
     icp:
       max_iterations: 40
       max_correspondence_distance: 2.0

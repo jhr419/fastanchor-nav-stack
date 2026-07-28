@@ -4,16 +4,20 @@
 #include <Eigen/Eigen>
 #include <Eigen/StdVector>
 #include <algorithm>
+#include <condition_variable>
 #include <cv_bridge/cv_bridge.h>
 #include <cmath>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <iostream>
+#include <mutex>
+#include <optional>
 #include <random>
 #include <nav_msgs/msg/odometry.hpp>
 #include <queue>
 #include <rclcpp/rclcpp.hpp>
 #include <rmw/qos_profiles.h>
 #include <tuple>
+#include <thread>
 #include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/image_encodings.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
@@ -150,7 +154,7 @@ struct MappingData {
 class GridMap {
 public:
   GridMap() {}
-  ~GridMap() {}
+  ~GridMap();
 
   enum { INVALID_IDX = -10000 };
 
@@ -213,6 +217,8 @@ private:
   // update occupancy by raycasting
   void updateOccupancyCallback();
   void visCallback();
+  void queueVisualizationSnapshot();
+  void visualizationWorkerLoop();
 
   // main update process
   void projectDepthImage();
@@ -264,6 +270,29 @@ private:
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr depth_cloud_pub_;
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr extrinsic_pose_pub_;
   rclcpp::TimerBase::SharedPtr occ_timer_, vis_timer_;
+
+  struct VisualizationSnapshot {
+    std::vector<double> occupancy;
+    std::vector<char> inflated;
+    Eigen::Vector3i map_voxel_num{Eigen::Vector3i::Zero()};
+    Eigen::Vector3i min_index{Eigen::Vector3i::Zero()};
+    Eigen::Vector3i max_index{Eigen::Vector3i::Zero()};
+    Eigen::Vector3d ray_position{Eigen::Vector3d::Zero()};
+    builtin_interfaces::msg::Time stamp;
+    std::string frame_id;
+    double resolution{0.0};
+    double min_occupancy_log{0.0};
+    double visualization_height{0.0};
+    bool has_ray_pose{false};
+    bool publish_occupancy{false};
+    bool publish_inflated{false};
+  };
+
+  std::mutex visualization_mutex_;
+  std::condition_variable visualization_cv_;
+  std::optional<VisualizationSnapshot> pending_visualization_;
+  std::thread visualization_worker_;
+  bool stop_visualization_worker_{false};
 
   //
   uniform_real_distribution<double> rand_noise_;

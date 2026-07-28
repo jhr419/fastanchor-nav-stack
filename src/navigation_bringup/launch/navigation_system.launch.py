@@ -18,10 +18,13 @@ def generate_launch_description():
     base_frame = LaunchConfiguration("base_frame")
     localization_pose_topic = LaunchConfiguration("localization_pose_topic")
     localization_cloud_topic = LaunchConfiguration("localization_cloud_topic")
+    aligned_cloud_interval_s = LaunchConfiguration("aligned_cloud_interval_s")
+    path_publish_interval_s = LaunchConfiguration("path_publish_interval_s")
     initial_pose_topic = LaunchConfiguration("initial_pose_topic")
     goal_topic = LaunchConfiguration("goal_topic")
     global_path_topic = LaunchConfiguration("global_path_topic")
     local_target_distance = LaunchConfiguration("local_target_distance")
+    grid_visualization_rate_hz = LaunchConfiguration("grid_visualization_rate_hz")
     cmd_vel_topic = LaunchConfiguration("cmd_vel_topic")
 
     fast_anchor_launch = PathJoinSubstitution([
@@ -58,6 +61,16 @@ def generate_launch_description():
         DeclareLaunchArgument("base_frame", default_value="base_link"),
         DeclareLaunchArgument("localization_pose_topic", default_value="/fast_anchor/odom"),
         DeclareLaunchArgument("localization_cloud_topic", default_value="/fast_anchor/aligned_cloud"),
+        DeclareLaunchArgument(
+            "aligned_cloud_interval_s",
+            default_value="0.2",
+            description="FastAnchor aligned-cloud period; 0 restores sensor-rate output",
+        ),
+        DeclareLaunchArgument(
+            "path_publish_interval_s",
+            default_value="0.5",
+            description="FastAnchor full-path publication period",
+        ),
         DeclareLaunchArgument("initial_pose_topic", default_value="/initialpose"),
         DeclareLaunchArgument("goal_topic", default_value="/move_base_simple/goal"),
         DeclareLaunchArgument("global_path_topic", default_value="/planned_path"),
@@ -65,6 +78,11 @@ def generate_launch_description():
             "local_target_distance",
             default_value="4.0",
             description="Distance from the robot to the SCAN local target in metres",
+        ),
+        DeclareLaunchArgument(
+            "grid_visualization_rate_hz",
+            default_value="5.0",
+            description="SCAN occupancy visualization rate; 0 disables it on headless platforms",
         ),
         DeclareLaunchArgument("cmd_vel_topic", default_value="/cmd_vel"),
         DeclareLaunchArgument("controller_mode", default_value="closed_loop"),
@@ -77,9 +95,17 @@ def generate_launch_description():
         DeclareLaunchArgument("start_localization", default_value="true"),
         DeclareLaunchArgument("start_livox_driver", default_value="true"),
         DeclareLaunchArgument("start_fastlio", default_value="true"),
-        DeclareLaunchArgument("start_localization_rviz", default_value="true"),
+        DeclareLaunchArgument(
+            "start_localization_rviz",
+            default_value="false",
+            description="Start localization RViz (disabled by default for onboard CPU savings)",
+        ),
         DeclareLaunchArgument("start_global_planner_rviz", default_value="false"),
-        DeclareLaunchArgument("start_local_planner_rviz", default_value="true"),
+        DeclareLaunchArgument(
+            "start_local_planner_rviz",
+            default_value="false",
+            description="Start SCAN RViz (disabled by default for onboard CPU savings)",
+        ),
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(fast_anchor_launch),
             condition=IfCondition(LaunchConfiguration("start_localization")),
@@ -94,6 +120,8 @@ def generate_launch_description():
                 "initial_pose_topic": initial_pose_topic,
                 "output_odom_topic": localization_pose_topic,
                 "aligned_cloud_topic": localization_cloud_topic,
+                "aligned_cloud_interval_s": aligned_cloud_interval_s,
+                "path_publish_interval_s": path_publish_interval_s,
                 "lidar_model": LaunchConfiguration("lidar_model"),
                 "start_livox_driver": LaunchConfiguration("start_livox_driver"),
                 "start_fastlio": LaunchConfiguration("start_fastlio"),
@@ -153,6 +181,7 @@ def generate_launch_description():
                 "goal_topic": goal_topic,
                 "global_path_topic": global_path_topic,
                 "local_target_distance": local_target_distance,
+                "grid_visualization_rate_hz": grid_visualization_rate_hz,
                 "reference_path_topic": "/scan_planner/manual_reference_path",
                 "publish_marker_reference_path": "false",
                 "use_sim_time": use_sim_time,

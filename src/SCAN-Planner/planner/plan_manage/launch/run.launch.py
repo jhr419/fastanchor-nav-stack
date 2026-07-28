@@ -106,6 +106,9 @@ def _setup(context):
         "grid_map.cloud_is_world": cloud_is_world,
         "grid_map.need_extrinsic": need_extrinsic,
         "grid_map.frame_id": planning_frame,
+        "grid_map.visualization_rate_hz": float(
+            LaunchConfiguration("grid_visualization_rate_hz").perform(context)
+        ),
     }
     actions = [
         Node(
@@ -264,6 +267,11 @@ def generate_launch_description():
             DeclareLaunchArgument("goal_topic", default_value="/move_base_simple/goal"),
             DeclareLaunchArgument("global_path_topic", default_value="/initial_path"),
             DeclareLaunchArgument("local_target_distance", default_value="4.0"),
+            DeclareLaunchArgument(
+                "grid_visualization_rate_hz",
+                default_value="5.0",
+                description="Occupancy visualization rate; 0 disables visualization work",
+            ),
             DeclareLaunchArgument("reference_path_topic", default_value="/initial_path"),
             DeclareLaunchArgument("publish_marker_reference_path", default_value="true"),
             DeclareLaunchArgument("keypoints_file", default_value=""),

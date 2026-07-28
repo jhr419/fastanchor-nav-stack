@@ -1,5 +1,6 @@
 #include "plan_env/grid_map.h"
 #include <cmath>
+#include <chrono>
 #include <limits>
 #include <string>
 #include <geometry_msgs/msg/transform_stamped.hpp>
@@ -14,6 +15,18 @@ void load_parameter(rclcpp::Node *node, const std::string &name, T &value, const
   node->get_parameter(name, value);
 }
 }  // namespace
+
+GridMap::~GridMap()
+{
+  {
+    std::lock_guard<std::mutex> lock(visualization_mutex_);
+    stop_visualization_worker_ = true;
+    pending_visualization_.reset();
+  }
+  visualization_cv_.notify_one();
+  if (visualization_worker_.joinable())
+    visualization_worker_.join();
+}
 
 void GridMap::initMap(rclcpp::Node *node)
 {
@@ -56,6 +69,8 @@ void GridMap::initMap(rclcpp::Node *node)
 
   load_parameter(node_, "grid_map.vis_height", mp_.vis_height_, 0.3);
   load_parameter(node_, "grid_map.show_occ_time", mp_.show_occ_time_, false);
+  double visualization_rate_hz;
+  load_parameter(node_, "grid_map.visualization_rate_hz", visualization_rate_hz, 5.0);
 
   load_parameter(node_, "grid_map.frame_id", mp_.frame_id_, string("world"));
   load_parameter(node_, "grid_map.sliding_map_frame_id", mp_.sliding_map_frame_id_, string("sliding_map"));
@@ -162,8 +177,6 @@ void GridMap::initMap(rclcpp::Node *node)
 
   occ_timer_ = node_->create_wall_timer(std::chrono::milliseconds(50),
                                         std::bind(&GridMap::updateOccupancyCallback, this));
-  vis_timer_ = node_->create_wall_timer(std::chrono::milliseconds(50),
-                                        std::bind(&GridMap::visCallback, this));
 
   map_pub_ = node_->create_publisher<sensor_msgs::msg::PointCloud2>("grid_map/occupancy", rclcpp::SensorDataQoS());
   map_inf_pub_ = node_->create_publisher<sensor_msgs::msg::PointCloud2>("grid_map/occupancy_inflate", rclcpp::SensorDataQoS());
@@ -172,6 +185,15 @@ void GridMap::initMap(rclcpp::Node *node)
   unknown_pub_ = node_->create_publisher<sensor_msgs::msg::PointCloud2>("grid_map/unknown", rclcpp::SensorDataQoS());
   depth_cloud_pub_ = node_->create_publisher<sensor_msgs::msg::PointCloud2>("grid_map/depth_cloud", rclcpp::SensorDataQoS());
   extrinsic_pose_pub_ = node_->create_publisher<nav_msgs::msg::Odometry>("grid_map/sensor_pose_extrinsic", 10);
+
+  if (visualization_rate_hz > 0.0)
+  {
+    const auto visualization_period = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::duration<double>(1.0 / visualization_rate_hz));
+    vis_timer_ = node_->create_wall_timer(visualization_period,
+                                          std::bind(&GridMap::visCallback, this));
+    visualization_worker_ = std::thread(&GridMap::visualizationWorkerLoop, this);
+  }
 
   md_.occ_need_update_ = false;
   md_.use_cloud_update_ = false;
@@ -732,12 +754,112 @@ Eigen::Vector3d GridMap::closetPointInMap(const Eigen::Vector3d &pt, const Eigen
 
 void GridMap::visCallback()
 {
-
-  publishMap();
-  publishMapInflate(true);
+  queueVisualizationSnapshot();
   publishSlidingMapFrame();
   publishSlidingMapBBox();
   publishDepthCloud();
+}
+
+void GridMap::queueVisualizationSnapshot()
+{
+  const bool publish_occupancy = map_pub_->get_subscription_count() > 0;
+  const bool publish_inflated = map_inf_pub_->get_subscription_count() > 0;
+  if (!publish_occupancy && !publish_inflated)
+    return;
+
+  VisualizationSnapshot snapshot;
+  if (publish_occupancy)
+    snapshot.occupancy = md_.occupancy_buffer_;
+  if (publish_inflated)
+    snapshot.inflated = md_.occupancy_buffer_inflate_;
+  snapshot.map_voxel_num = mp_.map_voxel_num_;
+  snapshot.min_index = mp_.map_bound_min_idx_;
+  snapshot.max_index = mp_.map_bound_max_idx_;
+  snapshot.ray_position = md_.ray_pos_;
+  snapshot.stamp = node_->now();
+  snapshot.frame_id = mp_.frame_id_;
+  snapshot.resolution = mp_.resolution_;
+  snapshot.min_occupancy_log = mp_.min_occupancy_log_;
+  snapshot.visualization_height = mp_.vis_height_;
+  snapshot.has_ray_pose = md_.has_ray_pose_;
+  snapshot.publish_occupancy = publish_occupancy;
+  snapshot.publish_inflated = publish_inflated;
+
+  {
+    std::lock_guard<std::mutex> lock(visualization_mutex_);
+    // Keep only the newest frame when serialization is slower than the requested
+    // rate. Visualization must never build an unbounded backlog behind planning.
+    pending_visualization_ = std::move(snapshot);
+  }
+  visualization_cv_.notify_one();
+}
+
+void GridMap::visualizationWorkerLoop()
+{
+  while (true)
+  {
+    VisualizationSnapshot snapshot;
+    {
+      std::unique_lock<std::mutex> lock(visualization_mutex_);
+      visualization_cv_.wait(lock, [this]() {
+        return stop_visualization_worker_ || pending_visualization_.has_value();
+      });
+      if (stop_visualization_worker_)
+        return;
+      snapshot = std::move(*pending_visualization_);
+      pending_visualization_.reset();
+    }
+
+    pcl::PointCloud<pcl::PointXYZ> occupancy_cloud;
+    pcl::PointCloud<pcl::PointXYZ> inflated_cloud;
+    const int size_y = snapshot.map_voxel_num.y();
+    const int size_z = snapshot.map_voxel_num.z();
+    auto local_index = [](int value, int size) {
+      int result = value % size;
+      return result < 0 ? result + size : result;
+    };
+    auto address = [&](int x, int y, int z) {
+      return local_index(x, snapshot.map_voxel_num.x()) * size_y * size_z +
+             local_index(y, size_y) * size_z + local_index(z, size_z);
+    };
+
+    for (int x = snapshot.min_index.x(); x <= snapshot.max_index.x(); ++x)
+      for (int y = snapshot.min_index.y(); y <= snapshot.max_index.y(); ++y)
+        for (int z = snapshot.min_index.z(); z <= snapshot.max_index.z(); ++z)
+        {
+          const int cell = address(x, y, z);
+          const double point_z = (z + 0.5) * snapshot.resolution;
+          if (snapshot.has_ray_pose &&
+              point_z > snapshot.ray_position.z() + snapshot.visualization_height)
+            continue;
+
+          pcl::PointXYZ point;
+          point.x = static_cast<float>((x + 0.5) * snapshot.resolution);
+          point.y = static_cast<float>((y + 0.5) * snapshot.resolution);
+          point.z = static_cast<float>(point_z);
+          if (snapshot.publish_occupancy &&
+              snapshot.occupancy[cell] >= snapshot.min_occupancy_log)
+            occupancy_cloud.push_back(point);
+          if (snapshot.publish_inflated && snapshot.inflated[cell] != 0)
+            inflated_cloud.push_back(point);
+        }
+
+    auto publish_cloud = [&](pcl::PointCloud<pcl::PointXYZ> &cloud,
+                             const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr &publisher) {
+      cloud.width = cloud.points.size();
+      cloud.height = 1;
+      cloud.is_dense = true;
+      cloud.header.frame_id = snapshot.frame_id;
+      sensor_msgs::msg::PointCloud2 cloud_msg;
+      pcl::toROSMsg(cloud, cloud_msg);
+      cloud_msg.header.stamp = snapshot.stamp;
+      publisher->publish(cloud_msg);
+    };
+    if (snapshot.publish_occupancy)
+      publish_cloud(occupancy_cloud, map_pub_);
+    if (snapshot.publish_inflated)
+      publish_cloud(inflated_cloud, map_inf_pub_);
+  }
 }
 
 void GridMap::updateOccupancyCallback()

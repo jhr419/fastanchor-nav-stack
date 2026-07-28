@@ -198,6 +198,17 @@ fitness_score_threshold: 2.0
 relocalization_interval_s: 0.2
 ```
 
+Runtime output throttles used by the integrated performance profile:
+
+```yaml
+output.aligned_cloud_interval_s: 0.2  # 0 restores sensor-rate publication
+output.path_publish_interval_s: 0.5   # 0 restores publication on every pose
+```
+
+Static map clouds use transient-local QoS and are serialized once, after a
+subscriber appears. Do not restore periodic full-map serialization unless the
+map becomes mutable.
+
 Primary runtime YAML:
 
 ```text

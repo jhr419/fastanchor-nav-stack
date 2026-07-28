@@ -35,6 +35,17 @@ legacy defaults from the original package were preserved:
 - `max_iterations: 40`
 - `fitness_score_threshold: 2.0` in migrated YAML
 - `relocalization_interval_s: 0.2`
+- `output.aligned_cloud_interval_s: 0.2` in bringup YAML (`0.0` publishes every input scan)
+- `output.path_publish_interval_s: 0.5` in bringup YAML (`0.0` publishes every pose)
+
+The output intervals do not change ICP settings. With the default 0.2-second ICP
+interval, aligned-cloud input frames between ICP updates are discarded before
+PointCloud2 conversion and voxel filtering. The integrated SCAN map therefore
+receives 5 Hz clouds while its internal occupancy update timer remains at 20 Hz.
+
+Static map publishers use transient-local durability. Each unchanged map is
+serialized once, when its first subscriber appears; it is not republished on a
+periodic timer.
 
 Map paths are intentionally relative examples. Override them at launch time:
 

@@ -172,6 +172,8 @@ public:
     max_iterations_ = declare_parameter<int>("max_iterations", 40);
     fitness_score_threshold_ = declare_parameter<double>("fitness_score_threshold", 1.0);
     relocalization_interval_s_ = declare_parameter<double>("relocalization_interval_s", 0.2);
+    aligned_cloud_interval_s_ = declare_parameter<double>("aligned_cloud_interval_s", 0.0);
+    path_publish_interval_s_ = declare_parameter<double>("path_publish_interval_s", 0.0);
     use_initial_pose_param_ = declare_parameter<bool>("use_initial_pose_param", false);
 
     const auto base_to_body_xyz =
@@ -226,6 +228,10 @@ public:
       declare_parameter<double>("icp.fitness_score_threshold", fitness_score_threshold_);
     relocalization_interval_s_ =
       declare_parameter<double>("icp.relocalization_interval_s", relocalization_interval_s_);
+    aligned_cloud_interval_s_ =
+      declare_parameter<double>("output.aligned_cloud_interval_s", aligned_cloud_interval_s_);
+    path_publish_interval_s_ =
+      declare_parameter<double>("output.path_publish_interval_s", path_publish_interval_s_);
 
     base_to_body_ = makeTransform(base_to_body_xyz, base_to_body_rpy);
     body_to_base_ = base_to_body_.inverse();
@@ -254,19 +260,24 @@ public:
         icp_map_pcd_path_.c_str(), icp_map_cloud_->size(), map_leaf_size_);
     }
 
-    visualization_map_cloud_ = loadMapCloud(visualization_map_pcd_path_);
-    if (!visualization_map_cloud_ || visualization_map_cloud_->empty()) {
-      RCLCPP_WARN(
-        get_logger(),
-        "Visualization map PCD is empty: '%s'. Falling back to ICP target map for display.",
-        visualization_map_pcd_path_.c_str());
+    if (visualization_map_pcd_path_ == icp_map_pcd_path_) {
       visualization_map_cloud_ = icp_map_cloud_;
+      RCLCPP_INFO(get_logger(), "Reusing the ICP map for visualization; no duplicate PCD copy was loaded.");
     } else {
-      downsample(visualization_map_cloud_, map_leaf_size_);
-      RCLCPP_INFO(
-        get_logger(),
-        "Loaded visualization map: %s points=%zu leaf=%.3f",
-        visualization_map_pcd_path_.c_str(), visualization_map_cloud_->size(), map_leaf_size_);
+      visualization_map_cloud_ = loadMapCloud(visualization_map_pcd_path_);
+      if (!visualization_map_cloud_ || visualization_map_cloud_->empty()) {
+        RCLCPP_WARN(
+          get_logger(),
+          "Visualization map PCD is empty: '%s'. Falling back to ICP target map for display.",
+          visualization_map_pcd_path_.c_str());
+        visualization_map_cloud_ = icp_map_cloud_;
+      } else {
+        downsample(visualization_map_cloud_, map_leaf_size_);
+        RCLCPP_INFO(
+          get_logger(),
+          "Loaded visualization map: %s points=%zu leaf=%.3f",
+          visualization_map_pcd_path_.c_str(), visualization_map_cloud_->size(), map_leaf_size_);
+      }
     }
 
     icp_.setMaximumIterations(max_iterations_);
@@ -316,7 +327,8 @@ public:
 
     if (publish_map_cloud_) {
       map_publish_timer_ = create_wall_timer(
-        std::chrono::seconds(1), std::bind(&FastAnchorLocalizationNode::publishMapCloud, this));
+        std::chrono::milliseconds(250),
+        std::bind(&FastAnchorLocalizationNode::publishMapCloudOnce, this));
     }
 
     RCLCPP_INFO(
@@ -515,6 +527,8 @@ private:
     have_initial_pose_ = false;
     have_pending_initial_pose_ = false;
     last_icp_stamp_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
+    last_aligned_cloud_stamp_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
+    last_path_publish_stamp_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
     last_icp_fitness_score_ = -1.0;
     last_icp_converged_ = false;
     path_msg_.poses.clear();
@@ -585,6 +599,19 @@ private:
       return;
     }
 
+    const Eigen::Affine3d guess_map_to_base = map_to_odom_ * latest_odom_to_base_;
+    const rclcpp::Time stamp(msg->header.stamp);
+    const double since_last_icp = (stamp - last_icp_stamp_).seconds();
+    const double since_last_aligned = (stamp - last_aligned_cloud_stamp_).seconds();
+    const bool icp_due = last_icp_stamp_.nanoseconds() == 0 || since_last_icp < 0.0 ||
+      since_last_icp >= relocalization_interval_s_;
+    const bool aligned_cloud_due = aligned_cloud_interval_s_ <= 0.0 ||
+      last_aligned_cloud_stamp_.nanoseconds() == 0 || since_last_aligned < 0.0 ||
+      since_last_aligned >= aligned_cloud_interval_s_;
+    if (!icp_due && !aligned_cloud_due) {
+      return;
+    }
+
     auto source_base = makeSourceCloud(*msg);
     if (static_cast<int>(source_base->size()) < min_scan_points_) {
       RCLCPP_WARN_THROTTLE(
@@ -596,9 +623,7 @@ private:
       return;
     }
 
-    const Eigen::Affine3d guess_map_to_base = map_to_odom_ * latest_odom_to_base_;
-    const rclcpp::Time stamp(msg->header.stamp);
-    if ((stamp - last_icp_stamp_).seconds() < relocalization_interval_s_) {
+    if (!icp_due) {
       // ICP intentionally runs at a lower rate than the LiDAR. For intermediate
       // scans, apply the latest map->odom correction to the current (not cached)
       // cloud so aligned_cloud follows the sensor input rate.
@@ -607,6 +632,7 @@ private:
         *source_base, aligned, guess_map_to_base.matrix().cast<float>());
       publishTfAndPose(msg->header.stamp, guess_map_to_base, -1.0);
       publishAlignedCloud(aligned, msg->header.stamp);
+      last_aligned_cloud_stamp_ = stamp;
       publishStatus(
         msg->header.stamp, fast_anchor_interfaces::msg::LocalizationStatus::TRACKING,
         "tracking with latest map->odom correction", last_icp_converged_, last_icp_fitness_score_);
@@ -629,6 +655,7 @@ private:
         fitness, fitness_score_threshold_);
       publishTfAndPose(msg->header.stamp, guess_map_to_base, fitness);
       publishAlignedCloud(aligned, msg->header.stamp);
+      last_aligned_cloud_stamp_ = stamp;
       publishIcpResult(msg->header.stamp, false, fitness, guess_map_to_base);
       publishStatus(
         msg->header.stamp, fast_anchor_interfaces::msg::LocalizationStatus::LOST,
@@ -643,6 +670,7 @@ private:
     last_icp_converged_ = true;
     publishTfAndPose(msg->header.stamp, refined_map_to_base, fitness);
     publishAlignedCloud(aligned, msg->header.stamp);
+    last_aligned_cloud_stamp_ = stamp;
     publishIcpResult(msg->header.stamp, true, fitness, refined_map_to_base);
     publishStatus(
       msg->header.stamp, fast_anchor_interfaces::msg::LocalizationStatus::TRACKING,
@@ -731,7 +759,15 @@ private:
       const auto erase_count = path_msg_.poses.size() - static_cast<size_t>(max_path_size_);
       path_msg_.poses.erase(path_msg_.poses.begin(), path_msg_.poses.begin() + erase_count);
     }
-    path_pub_->publish(path_msg_);
+    const rclcpp::Time path_stamp(stamp);
+    const double since_last_path = (path_stamp - last_path_publish_stamp_).seconds();
+    const bool path_due = path_publish_interval_s_ <= 0.0 ||
+      last_path_publish_stamp_.nanoseconds() == 0 || since_last_path < 0.0 ||
+      since_last_path >= path_publish_interval_s_;
+    if (path_due && path_pub_->get_subscription_count() > 0) {
+      path_pub_->publish(path_msg_);
+      last_path_publish_stamp_ = path_stamp;
+    }
   }
 
   void publishIcpResult(
@@ -785,6 +821,9 @@ private:
     const pcl::PointCloud<PointType> & aligned,
     const builtin_interfaces::msg::Time & stamp) const
   {
+    if (aligned_pub_->get_subscription_count() == 0) {
+      return;
+    }
     sensor_msgs::msg::PointCloud2 cloud_msg;
     pcl::toROSMsg(aligned, cloud_msg);
     cloud_msg.header.stamp = stamp;
@@ -792,22 +831,36 @@ private:
     aligned_pub_->publish(cloud_msg);
   }
 
-  void publishMapCloud() const
+  void publishMapCloudOnce()
   {
-    if (visualization_map_cloud_ && !visualization_map_cloud_->empty()) {
+    const bool publish_visualization_map = !visualization_map_published_ &&
+      visualization_map_pub_->get_subscription_count() > 0;
+    const bool publish_icp_map = !icp_map_published_ &&
+      icp_map_pub_->get_subscription_count() > 0;
+    if (!publish_visualization_map && !publish_icp_map) {
+      return;
+    }
+    if (publish_visualization_map && visualization_map_cloud_ &&
+      !visualization_map_cloud_->empty())
+    {
       sensor_msgs::msg::PointCloud2 cloud_msg;
       pcl::toROSMsg(*visualization_map_cloud_, cloud_msg);
       cloud_msg.header.stamp = now();
       cloud_msg.header.frame_id = map_frame_;
       visualization_map_pub_->publish(cloud_msg);
+      visualization_map_published_ = true;
     }
 
-    if (icp_map_cloud_ && !icp_map_cloud_->empty()) {
+    if (publish_icp_map && icp_map_cloud_ && !icp_map_cloud_->empty()) {
       sensor_msgs::msg::PointCloud2 cloud_msg;
       pcl::toROSMsg(*icp_map_cloud_, cloud_msg);
       cloud_msg.header.stamp = now();
       cloud_msg.header.frame_id = map_frame_;
       icp_map_pub_->publish(cloud_msg);
+      icp_map_published_ = true;
+    }
+    if (visualization_map_published_ && icp_map_published_ && map_publish_timer_) {
+      map_publish_timer_->cancel();
     }
   }
 
@@ -839,6 +892,8 @@ private:
   bool publish_base_tf_ = true;
   bool odom_coincident_with_base_ = false;
   bool publish_map_cloud_ = true;
+  bool visualization_map_published_ = false;
+  bool icp_map_published_ = false;
   bool use_initial_pose_param_ = false;
   int max_path_size_ = 10000;
 
@@ -855,6 +910,8 @@ private:
   int max_iterations_ = 40;
   double fitness_score_threshold_ = 1.0;
   double relocalization_interval_s_ = 0.2;
+  double aligned_cloud_interval_s_ = 0.0;
+  double path_publish_interval_s_ = 0.0;
   double fastlio_reset_timeout_s_ = 1.0;
 
   Eigen::Affine3d base_to_body_ = Eigen::Affine3d::Identity();
@@ -866,6 +923,8 @@ private:
   Eigen::Affine3d map_to_odom_ = Eigen::Affine3d::Identity();
   builtin_interfaces::msg::Time latest_odom_stamp_;
   rclcpp::Time last_icp_stamp_{0, 0, RCL_ROS_TIME};
+  rclcpp::Time last_aligned_cloud_stamp_{0, 0, RCL_ROS_TIME};
+  rclcpp::Time last_path_publish_stamp_{0, 0, RCL_ROS_TIME};
   double last_icp_fitness_score_ = -1.0;
   bool last_icp_converged_ = false;
   bool have_odom_ = false;
