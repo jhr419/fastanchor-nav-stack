@@ -201,9 +201,15 @@ relocalization_interval_s: 0.2
 Runtime output throttles used by the integrated performance profile:
 
 ```yaml
-output.aligned_cloud_interval_s: 0.2  # 0 restores sensor-rate publication
+output.aligned_cloud_interval_s: 0.0  # every fresh input scan; ICP stays rate-limited
+output.aligned_cloud_publish_rate_hz: 25.0  # fixed cached output; 0 disables repeats
 output.path_publish_interval_s: 0.5   # 0 restores publication on every pose
 ```
+
+Fixed-rate repeats preserve the original acquisition timestamp. SCAN uses this
+stamp to prevent the same observation from changing occupancy log odds more than
+once. The fixed-rate timer runs in a separate callback group on the node's
+two-thread executor so ICP cannot block the publication cadence.
 
 Static map clouds use transient-local QoS and are serialized once, after a
 subscriber appears. Do not restore periodic full-map serialization unless the

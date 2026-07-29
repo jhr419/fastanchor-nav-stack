@@ -1003,6 +1003,12 @@ void GridMap::cloudCallback(const sensor_msgs::msg::PointCloud2::ConstSharedPtr 
     return;
   }
 
+  const rclcpp::Time cloud_stamp(img->header.stamp);
+  if (cloud_stamp.nanoseconds() != 0 && cloud_stamp == last_cloud_stamp_)
+    return;
+  if (cloud_stamp.nanoseconds() != 0)
+    last_cloud_stamp_ = cloud_stamp;
+
   pcl::PointCloud<pcl::PointXYZ> latest_cloud;
   pcl::fromROSMsg(*img, latest_cloud);
 

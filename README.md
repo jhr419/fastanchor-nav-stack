@@ -57,9 +57,9 @@ only change interface names and do not alter planner behavior.
 The optimized defaults preserve 5 Hz ICP, 20 Hz occupancy fusion, and 100 Hz
 control. They reduce non-critical work as follows:
 
-- FastAnchor preprocesses/publishes the aligned cloud at 5 Hz instead of every
-  LiDAR frame, publishes the full path at 2 Hz, and serializes each static map
-  only once after a subscriber appears.
+- FastAnchor preprocesses every fresh LiDAR cloud and republishes the latest
+  aligned result at a fixed 25 Hz from a separate executor thread. ICP itself
+  remains limited to 5 Hz, and the full path remains limited to 2 Hz.
 - SCAN publishes occupancy visualization at 5 Hz. Its two visualization layers
   share one voxel traversal and serialization runs on a dedicated worker thread,
   allowing Linux to schedule visualization and planning on different CPU cores.
@@ -71,7 +71,7 @@ Restore the previous diagnostic rates without reverting code:
 ```bash
 ros2 launch navigation_bringup navigation_system.launch.py \
   map_pcd_path:=$PWD/maps/map_preprocessed2.pcd \
-  aligned_cloud_interval_s:=0.0 \
+  aligned_cloud_publish_rate_hz:=0.0 \
   path_publish_interval_s:=0.0 \
   grid_visualization_rate_hz:=20.0 \
   start_localization_rviz:=true \

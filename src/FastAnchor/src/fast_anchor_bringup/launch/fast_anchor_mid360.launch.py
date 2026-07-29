@@ -66,6 +66,7 @@ def generate_launch_description():
     output_odom_topic = LaunchConfiguration("output_odom_topic")
     aligned_cloud_topic = LaunchConfiguration("aligned_cloud_topic")
     aligned_cloud_interval_s = LaunchConfiguration("aligned_cloud_interval_s")
+    aligned_cloud_publish_rate_hz = LaunchConfiguration("aligned_cloud_publish_rate_hz")
     path_publish_interval_s = LaunchConfiguration("path_publish_interval_s")
 
     default_config = PathJoinSubstitution([
@@ -95,8 +96,13 @@ def generate_launch_description():
         DeclareLaunchArgument("aligned_cloud_topic", default_value="/fast_anchor/aligned_cloud"),
         DeclareLaunchArgument(
             "aligned_cloud_interval_s",
-            default_value="0.2",
+            default_value="0.0",
             description="Minimum aligned-cloud period; 0 publishes every input scan",
+        ),
+        DeclareLaunchArgument(
+            "aligned_cloud_publish_rate_hz",
+            default_value="25.0",
+            description="Fixed aligned-cloud output rate; 0 publishes only fresh input scans",
         ),
         DeclareLaunchArgument(
             "path_publish_interval_s",
@@ -183,6 +189,9 @@ def generate_launch_description():
                     "topics.aligned_cloud": aligned_cloud_topic,
                     "output.aligned_cloud_interval_s": ParameterValue(
                         aligned_cloud_interval_s, value_type=float
+                    ),
+                    "output.aligned_cloud_publish_rate_hz": ParameterValue(
+                        aligned_cloud_publish_rate_hz, value_type=float
                     ),
                     "output.path_publish_interval_s": ParameterValue(
                         path_publish_interval_s, value_type=float

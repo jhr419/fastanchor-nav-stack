@@ -5,8 +5,9 @@
 The resource path targets repeated work rather than changing localization or
 collision algorithms:
 
-1. FastAnchor rejects input frames that are due for neither ICP nor aligned-cloud
-   output before PointCloud2 conversion, filtering, and voxelization.
+1. FastAnchor keeps ICP rate-limited, processes every fresh LiDAR input, and
+   publishes the latest aligned cloud at a fixed 25 Hz on a separate executor
+   thread. Repeated messages preserve the acquisition timestamp.
 2. Static ICP and visualization maps are published once with transient-local QoS
    instead of being converted to PointCloud2 every second.
 3. Localization path serialization is limited to 2 Hz by default.
@@ -54,8 +55,9 @@ Acceptance requires all of the following:
 
 - aggregate navigation CPU reduction is at least 50%;
 - no sustained 100% utilization on a single logical CPU;
-- `/fast_anchor/aligned_cloud` remains near 5 Hz and grid fusion continues to
-  accept updates without an increasing queue;
+- `/fast_anchor/aligned_cloud` remains above 20 Hz after the first valid cloud;
+- SCAN integrates each unique acquisition timestamp once rather than treating
+  cached 25 Hz repeats as independent sensor evidence;
 - ICP fitness/rejection behavior and path success are not materially worse;
 - `/cmd_vel` remains near 100 Hz while executing a trajectory.
 

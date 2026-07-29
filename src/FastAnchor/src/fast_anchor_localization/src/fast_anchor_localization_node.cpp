@@ -173,6 +173,7 @@ public:
     fitness_score_threshold_ = declare_parameter<double>("fitness_score_threshold", 1.0);
     relocalization_interval_s_ = declare_parameter<double>("relocalization_interval_s", 0.2);
     aligned_cloud_interval_s_ = declare_parameter<double>("aligned_cloud_interval_s", 0.0);
+    aligned_cloud_publish_rate_hz_ = declare_parameter<double>("aligned_cloud_publish_rate_hz", 25.0);
     path_publish_interval_s_ = declare_parameter<double>("path_publish_interval_s", 0.0);
     use_initial_pose_param_ = declare_parameter<bool>("use_initial_pose_param", false);
 
@@ -230,6 +231,8 @@ public:
       declare_parameter<double>("icp.relocalization_interval_s", relocalization_interval_s_);
     aligned_cloud_interval_s_ =
       declare_parameter<double>("output.aligned_cloud_interval_s", aligned_cloud_interval_s_);
+    aligned_cloud_publish_rate_hz_ =
+      declare_parameter<double>("output.aligned_cloud_publish_rate_hz", aligned_cloud_publish_rate_hz_);
     path_publish_interval_s_ =
       declare_parameter<double>("output.path_publish_interval_s", path_publish_interval_s_);
 
@@ -303,6 +306,16 @@ public:
     icp_result_pub_ =
       create_publisher<fast_anchor_interfaces::msg::IcpResult>(icp_result_topic_, 10);
     aligned_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(aligned_cloud_topic_, 2);
+    if (aligned_cloud_publish_rate_hz_ > 0.0) {
+      aligned_cloud_callback_group_ = create_callback_group(
+        rclcpp::CallbackGroupType::MutuallyExclusive);
+      const auto aligned_cloud_period = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::duration<double>(1.0 / aligned_cloud_publish_rate_hz_));
+      aligned_cloud_publish_timer_ = create_wall_timer(
+        aligned_cloud_period,
+        std::bind(&FastAnchorLocalizationNode::publishCachedAlignedCloud, this),
+        aligned_cloud_callback_group_);
+    }
     icp_map_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(
       icp_map_topic_, rclcpp::QoS(1).transient_local().reliable());
     visualization_map_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(
@@ -347,6 +360,10 @@ public:
       "Localization reset service ready: %s, FAST-LIO reset target: %s",
       reset_service_name_.c_str(),
       fastlio_reset_service_.c_str());
+    RCLCPP_INFO(
+      get_logger(),
+      "Aligned cloud processing interval %.3fs, fixed publication rate %.1f Hz",
+      aligned_cloud_interval_s_, aligned_cloud_publish_rate_hz_);
     publishStatus(
       now(), fast_anchor_interfaces::msg::LocalizationStatus::UNINITIALIZED,
       "waiting for map, odometry, and initial pose", false, -1.0);
@@ -529,6 +546,10 @@ private:
     last_icp_stamp_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
     last_aligned_cloud_stamp_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
     last_path_publish_stamp_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
+    {
+      std::lock_guard<std::mutex> aligned_lock(aligned_cloud_mutex_);
+      latest_aligned_cloud_msg_.reset();
+    }
     last_icp_fitness_score_ = -1.0;
     last_icp_converged_ = false;
     path_msg_.poses.clear();
@@ -819,7 +840,7 @@ private:
 
   void publishAlignedCloud(
     const pcl::PointCloud<PointType> & aligned,
-    const builtin_interfaces::msg::Time & stamp) const
+    const builtin_interfaces::msg::Time & stamp)
   {
     if (aligned_pub_->get_subscription_count() == 0) {
       return;
@@ -828,7 +849,31 @@ private:
     pcl::toROSMsg(aligned, cloud_msg);
     cloud_msg.header.stamp = stamp;
     cloud_msg.header.frame_id = map_frame_;
-    aligned_pub_->publish(cloud_msg);
+    if (aligned_cloud_publish_rate_hz_ > 0.0) {
+      std::lock_guard<std::mutex> lock(aligned_cloud_mutex_);
+      latest_aligned_cloud_msg_ =
+        std::make_shared<const sensor_msgs::msg::PointCloud2>(std::move(cloud_msg));
+    } else {
+      aligned_pub_->publish(cloud_msg);
+    }
+  }
+
+  void publishCachedAlignedCloud()
+  {
+    if (aligned_pub_->get_subscription_count() == 0) {
+      return;
+    }
+    sensor_msgs::msg::PointCloud2::ConstSharedPtr cloud_msg;
+    {
+      std::lock_guard<std::mutex> lock(aligned_cloud_mutex_);
+      cloud_msg = latest_aligned_cloud_msg_;
+    }
+    if (!cloud_msg) {
+      return;
+    }
+    // Preserve the acquisition stamp. Downstream mapping can distinguish a
+    // genuinely new LiDAR observation from a fixed-rate repeat of the cache.
+    aligned_pub_->publish(*cloud_msg);
   }
 
   void publishMapCloudOnce()
@@ -865,6 +910,7 @@ private:
   }
 
   std::mutex mutex_;
+  std::mutex aligned_cloud_mutex_;
   std::string map_pcd_path_;
   std::string icp_map_pcd_path_;
   std::string visualization_map_pcd_path_;
@@ -911,6 +957,7 @@ private:
   double fitness_score_threshold_ = 1.0;
   double relocalization_interval_s_ = 0.2;
   double aligned_cloud_interval_s_ = 0.0;
+  double aligned_cloud_publish_rate_hz_ = 25.0;
   double path_publish_interval_s_ = 0.0;
   double fastlio_reset_timeout_s_ = 1.0;
 
@@ -953,13 +1000,19 @@ private:
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr icp_map_pub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr visualization_map_pub_;
   rclcpp::TimerBase::SharedPtr map_publish_timer_;
+  rclcpp::TimerBase::SharedPtr aligned_cloud_publish_timer_;
+  rclcpp::CallbackGroup::SharedPtr aligned_cloud_callback_group_;
+  sensor_msgs::msg::PointCloud2::ConstSharedPtr latest_aligned_cloud_msg_;
   std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
 };
 
 int main(int argc, char ** argv)
 {
   rclcpp::init(argc, argv);
-  rclcpp::spin(std::make_shared<FastAnchorLocalizationNode>());
+  auto node = std::make_shared<FastAnchorLocalizationNode>();
+  rclcpp::executors::MultiThreadedExecutor executor(rclcpp::ExecutorOptions(), 2);
+  executor.add_node(node);
+  executor.spin();
   rclcpp::shutdown();
   return 0;
 }

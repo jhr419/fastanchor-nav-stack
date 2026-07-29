@@ -270,6 +270,7 @@ private:
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr depth_cloud_pub_;
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr extrinsic_pose_pub_;
   rclcpp::TimerBase::SharedPtr occ_timer_, vis_timer_;
+  rclcpp::Time last_cloud_stamp_{0, 0, RCL_ROS_TIME};
 
   struct VisualizationSnapshot {
     std::vector<double> occupancy;

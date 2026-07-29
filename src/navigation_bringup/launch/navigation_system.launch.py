@@ -19,6 +19,7 @@ def generate_launch_description():
     localization_pose_topic = LaunchConfiguration("localization_pose_topic")
     localization_cloud_topic = LaunchConfiguration("localization_cloud_topic")
     aligned_cloud_interval_s = LaunchConfiguration("aligned_cloud_interval_s")
+    aligned_cloud_publish_rate_hz = LaunchConfiguration("aligned_cloud_publish_rate_hz")
     path_publish_interval_s = LaunchConfiguration("path_publish_interval_s")
     initial_pose_topic = LaunchConfiguration("initial_pose_topic")
     goal_topic = LaunchConfiguration("goal_topic")
@@ -63,8 +64,13 @@ def generate_launch_description():
         DeclareLaunchArgument("localization_cloud_topic", default_value="/fast_anchor/aligned_cloud"),
         DeclareLaunchArgument(
             "aligned_cloud_interval_s",
-            default_value="0.2",
+            default_value="0.0",
             description="FastAnchor aligned-cloud period; 0 restores sensor-rate output",
+        ),
+        DeclareLaunchArgument(
+            "aligned_cloud_publish_rate_hz",
+            default_value="25.0",
+            description="Fixed FastAnchor aligned-cloud output rate; 0 disables cached repeats",
         ),
         DeclareLaunchArgument(
             "path_publish_interval_s",
@@ -121,6 +127,7 @@ def generate_launch_description():
                 "output_odom_topic": localization_pose_topic,
                 "aligned_cloud_topic": localization_cloud_topic,
                 "aligned_cloud_interval_s": aligned_cloud_interval_s,
+                "aligned_cloud_publish_rate_hz": aligned_cloud_publish_rate_hz,
                 "path_publish_interval_s": path_publish_interval_s,
                 "lidar_model": LaunchConfiguration("lidar_model"),
                 "start_livox_driver": LaunchConfiguration("start_livox_driver"),
