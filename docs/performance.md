@@ -19,6 +19,11 @@ collision algorithms:
 Planning-critical rates remain unchanged: ICP 5 Hz, occupancy fusion 20 Hz,
 collision checks 20 Hz, and closed-loop control 100 Hz.
 
+The fixed 25 Hz cloud output increases DDS serialization and transport work even
+when the sensor frame is unchanged. SCAN rejects repeated acquisition stamps, so
+this output requirement does not multiply raycasting or occupancy evidence, but
+other subscribers should also avoid treating every publication as a fresh scan.
+
 ## Workstation evidence
 
 All changed packages were built in Release mode and the SCAN launch tests passed.
