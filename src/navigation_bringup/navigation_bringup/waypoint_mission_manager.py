@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import json
+import math
 from typing import Optional
 
 import rclpy
 from geometry_msgs.msg import PoseStamped
-from nav_msgs.msg import Odometry
+from nav_msgs.msg import Odometry, Path
 from rcl_interfaces.msg import ParameterDescriptor
 from rclpy.logging import get_logger
 from rclpy.node import Node
@@ -41,9 +42,11 @@ class WaypointMissionManager(Node):
         self.declare_parameter("frame_id", "map")
         self.declare_parameter("odom_topic", "/fast_anchor/odom")
         self.declare_parameter("goal_topic", "/move_base_simple/goal")
+        self.declare_parameter("path_topic", "/planned_path")
         self.declare_parameter("status_topic", "/waypoint_mission/status")
         self.declare_parameter("xy_tolerance", 0.5)
         self.declare_parameter("z_tolerance", -1.0)
+        self.declare_parameter("path_goal_tolerance", 0.75)
         self.declare_parameter("hold_time", 0.5)
         self.declare_parameter("loop", False)
 
@@ -51,7 +54,11 @@ class WaypointMissionManager(Node):
         self._frame_id = str(self.get_parameter("frame_id").value)
         odom_topic = str(self.get_parameter("odom_topic").value)
         goal_topic = str(self.get_parameter("goal_topic").value)
+        path_topic = str(self.get_parameter("path_topic").value)
         status_topic = str(self.get_parameter("status_topic").value)
+        self._path_goal_tolerance = float(
+            self.get_parameter("path_goal_tolerance").value
+        )
         self._sequence = WaypointSequence(
             waypoints=waypoints,
             xy_tolerance=float(self.get_parameter("xy_tolerance").value),
@@ -61,15 +68,23 @@ class WaypointMissionManager(Node):
         )
         if not self._frame_id:
             raise ValueError("frame_id must not be empty")
-        if not odom_topic or not goal_topic or not status_topic:
-            raise ValueError("odom_topic, goal_topic and status_topic must not be empty")
+        if not odom_topic or not goal_topic or not path_topic or not status_topic:
+            raise ValueError(
+                "odom_topic, goal_topic, path_topic and status_topic must not be empty"
+            )
+        if not math.isfinite(self._path_goal_tolerance) or self._path_goal_tolerance <= 0.0:
+            raise ValueError("path_goal_tolerance must be greater than zero")
 
         self._goal_publisher = self.create_publisher(PoseStamped, goal_topic, latched_qos())
         self._status_publisher = self.create_publisher(String, status_topic, latched_qos())
         self._odom_subscription = self.create_subscription(
             Odometry, odom_topic, self._odom_callback, qos_profile_sensor_data
         )
+        self._path_subscription = self.create_subscription(
+            Path, path_topic, self._path_callback, latched_qos()
+        )
         self._started = False
+        self._goal_published_stamp_ns = 0
         self._publish_status("WAITING_FOR_ODOMETRY")
         self.get_logger().info(
             "Loaded %d waypoint(s); waiting for odometry on %s"
@@ -95,14 +110,16 @@ class WaypointMissionManager(Node):
         if waypoint is None:
             return
         goal = PoseStamped()
-        goal.header.stamp = self.get_clock().now().to_msg()
+        goal_time = self.get_clock().now()
+        goal.header.stamp = goal_time.to_msg()
         goal.header.frame_id = self._frame_id
         goal.pose.position.x = waypoint[0]
         goal.pose.position.y = waypoint[1]
         goal.pose.position.z = waypoint[2]
         goal.pose.orientation.w = 1.0
+        self._goal_published_stamp_ns = goal_time.nanoseconds
         self._goal_publisher.publish(goal)
-        self._publish_status("NAVIGATING")
+        self._publish_status("WAITING_FOR_PATH")
         self.get_logger().info(
             "Published waypoint %d/%d: [%.3f, %.3f, %.3f]"
             % (
@@ -113,6 +130,33 @@ class WaypointMissionManager(Node):
                 waypoint[2],
             )
         )
+
+    def _path_callback(self, message: Path) -> None:
+        waypoint = self._sequence.current_waypoint
+        if not self._started or waypoint is None or not message.poses:
+            return
+
+        path_stamp_ns = (
+            int(message.header.stamp.sec) * 1_000_000_000
+            + int(message.header.stamp.nanosec)
+        )
+        if path_stamp_ns < self._goal_published_stamp_ns:
+            return
+
+        path_goal = message.poses[-1].pose.position
+        goal_distance = (
+            (float(path_goal.x) - waypoint[0]) ** 2
+            + (float(path_goal.y) - waypoint[1]) ** 2
+        ) ** 0.5
+        if goal_distance > self._path_goal_tolerance:
+            return
+
+        if self._sequence.confirm_current_waypoint():
+            self._publish_status("NAVIGATING")
+            self.get_logger().info(
+                "Confirmed FastPlanner path for waypoint %d/%d"
+                % (self._sequence.current_index + 1, len(self._sequence.waypoints))
+            )
 
     def _odom_callback(self, message: Odometry) -> None:
         if not self._started:

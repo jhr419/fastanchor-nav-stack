@@ -99,9 +99,11 @@ single-waypoint path publication is disabled so SCAN-Planner only receives FastP
 ## Multi-waypoint missions
 
 The integrated launch can read an ordered waypoint list from a ROS 2 parameter YAML. The
-mission manager publishes only the current waypoint to FastPlanner. After odometry remains
-within the configured arrival tolerance, it publishes the next waypoint. Every leg therefore
-continues to use the full FastPlanner A* -> SCAN-Planner -> controller chain.
+mission manager publishes only the current waypoint to FastPlanner. It waits until FastPlanner
+publishes a path whose endpoint matches that waypoint, and then waits for odometry to remain
+within the configured arrival tolerance before publishing the next waypoint. Every leg
+therefore continues to use the full FastPlanner A* -> SCAN-Planner -> controller chain; later
+waypoints cannot overwrite an earlier waypoint before it is planned and reached.
 
 Create a YAML file using numeric `x, y, z` triples in the `map` frame:
 
@@ -129,6 +131,8 @@ Useful mission arguments are:
 
 - `waypoint_xy_tolerance` (default `0.5` m): arrival radius in the XY plane.
 - `waypoint_z_tolerance` (default `-1.0`): negative disables the Z arrival check.
+- `waypoint_path_goal_tolerance` (default `0.75` m): allowed XY error when confirming that
+  FastPlanner produced a path for the current waypoint.
 - `waypoint_hold_time` (default `0.5` s): required continuous time inside the tolerance.
 - `waypoint_loop` (default `false`): repeat the route after the final waypoint.
 

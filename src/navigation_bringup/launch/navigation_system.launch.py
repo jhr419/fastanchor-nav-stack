@@ -112,6 +112,11 @@ def generate_launch_description():
             description="Z arrival tolerance; a negative value disables the Z check",
         ),
         DeclareLaunchArgument(
+            "waypoint_path_goal_tolerance",
+            default_value="0.75",
+            description="Maximum XY difference between a planned path endpoint and its waypoint",
+        ),
+        DeclareLaunchArgument(
             "waypoint_hold_time",
             default_value="0.5",
             description="Time that odometry must remain inside the arrival tolerance",
@@ -207,12 +212,16 @@ def generate_launch_description():
                     "frame_id": map_frame,
                     "odom_topic": localization_pose_topic,
                     "goal_topic": goal_topic,
+                    "path_topic": global_path_topic,
                     "status_topic": LaunchConfiguration("waypoint_status_topic"),
                     "xy_tolerance": ParameterValue(
                         LaunchConfiguration("waypoint_xy_tolerance"), value_type=float
                     ),
                     "z_tolerance": ParameterValue(
                         LaunchConfiguration("waypoint_z_tolerance"), value_type=float
+                    ),
+                    "path_goal_tolerance": ParameterValue(
+                        LaunchConfiguration("waypoint_path_goal_tolerance"), value_type=float
                     ),
                     "hold_time": ParameterValue(
                         LaunchConfiguration("waypoint_hold_time"), value_type=float

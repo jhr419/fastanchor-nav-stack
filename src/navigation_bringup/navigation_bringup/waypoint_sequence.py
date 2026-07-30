@@ -62,6 +62,7 @@ class WaypointSequence:
         self.loop = loop
         self.current_index = 0
         self.completed = False
+        self._current_confirmed = False
         self._arrival_started_at: Optional[float] = None
 
     @property
@@ -70,11 +71,22 @@ class WaypointSequence:
             return None
         return self.waypoints[self.current_index]
 
+    @property
+    def current_confirmed(self) -> bool:
+        return self._current_confirmed
+
+    def confirm_current_waypoint(self) -> bool:
+        """Mark the current goal as accepted by the global planning pipeline."""
+        if self.completed or self._current_confirmed:
+            return False
+        self._current_confirmed = True
+        return True
+
     def observe(
         self, position: Waypoint, timestamp_seconds: float
     ) -> Optional[ProgressEvent]:
         """Observe a position and return an event only when a waypoint is reached."""
-        if self.completed:
+        if self.completed or not self._current_confirmed:
             return None
         if not math.isfinite(timestamp_seconds):
             raise ValueError("timestamp_seconds must be finite")
@@ -96,6 +108,7 @@ class WaypointSequence:
 
         reached_index = self.current_index
         self._arrival_started_at = None
+        self._current_confirmed = False
         if reached_index + 1 < len(self.waypoints):
             self.current_index += 1
             return ProgressEvent(reached_index, self.current_index, completed=False)

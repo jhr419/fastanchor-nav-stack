@@ -26,6 +26,7 @@ def test_sequence_requires_stable_arrival_before_advancing():
         hold_time=0.5,
         loop=False,
     )
+    sequence.confirm_current_waypoint()
 
     assert sequence.observe((1.2, 0.0, 2.0), 1.0) is None
     assert sequence.observe((1.8, 0.0, 0.3), 1.2) is None
@@ -47,6 +48,7 @@ def test_sequence_completes_after_last_waypoint():
         hold_time=0.0,
         loop=False,
     )
+    sequence.confirm_current_waypoint()
 
     assert sequence.observe((1.0, 0.0, 0.8), 1.0) is None
     event = sequence.observe((1.0, 0.0, 0.4), 1.1)
@@ -64,9 +66,31 @@ def test_sequence_can_loop():
         hold_time=0.0,
         loop=True,
     )
+    sequence.confirm_current_waypoint()
 
     event = sequence.observe((1.0, 0.0, 0.3), 1.0)
 
     assert event is not None and event.looped
     assert not sequence.completed
     assert sequence.current_index == 0
+
+
+def test_each_waypoint_requires_a_separate_global_path_confirmation():
+    sequence = WaypointSequence(
+        [(1.0, 0.0, 0.3), (2.0, 0.0, 0.3)],
+        xy_tolerance=0.5,
+        z_tolerance=-1.0,
+        hold_time=0.0,
+        loop=False,
+    )
+
+    assert sequence.observe((1.0, 0.0, 0.3), 1.0) is None
+    assert sequence.confirm_current_waypoint()
+    first_event = sequence.observe((1.0, 0.0, 0.3), 1.1)
+    assert first_event is not None and first_event.next_index == 1
+
+    assert not sequence.current_confirmed
+    assert sequence.observe((2.0, 0.0, 0.3), 2.0) is None
+    assert sequence.confirm_current_waypoint()
+    second_event = sequence.observe((2.0, 0.0, 0.3), 2.1)
+    assert second_event is not None and second_event.completed
