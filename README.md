@@ -96,6 +96,46 @@ The existing blue/green interactive markers are reused. The initial-pose marker 
 to FastAnchor. In integrated mode the goal marker publishes only to FastPlanner; the direct
 single-waypoint path publication is disabled so SCAN-Planner only receives FastPlanner output.
 
+## Multi-waypoint missions
+
+The integrated launch can read an ordered waypoint list from a ROS 2 parameter YAML. The
+mission manager publishes only the current waypoint to FastPlanner. After odometry remains
+within the configured arrival tolerance, it publishes the next waypoint. Every leg therefore
+continues to use the full FastPlanner A* -> SCAN-Planner -> controller chain.
+
+Create a YAML file using numeric `x, y, z` triples in the `map` frame:
+
+```yaml
+waypoint_mission_manager:
+  ros__parameters:
+    waypoints: [
+      1.0, 0.0, 0.3,
+      2.0, 1.0, 0.3,
+      3.0, 0.0, 0.3
+    ]
+```
+
+An editable example is installed from
+`src/navigation_bringup/config/waypoints.example.yaml`. Start the mission with an absolute
+YAML path:
+
+```bash
+ros2 launch navigation_bringup navigation_system.launch.py \
+  map_pcd_path:=$PWD/maps/map_preprocessed2.pcd \
+  waypoints_file:=$PWD/src/navigation_bringup/config/waypoints.example.yaml
+```
+
+Useful mission arguments are:
+
+- `waypoint_xy_tolerance` (default `0.5` m): arrival radius in the XY plane.
+- `waypoint_z_tolerance` (default `-1.0`): negative disables the Z arrival check.
+- `waypoint_hold_time` (default `0.5` s): required continuous time inside the tolerance.
+- `waypoint_loop` (default `false`): repeat the route after the final waypoint.
+
+The transient-local `/waypoint_mission/status` topic publishes compact JSON status messages.
+If `waypoints_file` is omitted, the mission manager is not started and interactive single-goal
+navigation behaves as before.
+
 ## 本窗口问题汇总（2026-07-24）
 
 ### 已分析的问题

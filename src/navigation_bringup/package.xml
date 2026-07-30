@@ -7,13 +7,21 @@
   <license>MIT</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>ament_cmake_python</buildtool_depend>
+  <exec_depend>geometry_msgs</exec_depend>
   <exec_depend>fast_anchor_bringup</exec_depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
   <exec_depend>nav3d_global_planning</exec_depend>
   <exec_depend>pct_global_planner</exec_depend>
+  <exec_depend>rcl_interfaces</exec_depend>
+  <exec_depend>rclpy</exec_depend>
   <exec_depend>rviz2</exec_depend>
   <exec_depend>scan_planner</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+
+  <test_depend>ament_cmake_pytest</test_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

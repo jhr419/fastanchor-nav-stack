@@ -4,7 +4,7 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
@@ -27,6 +27,7 @@ def generate_launch_description():
     local_target_distance = LaunchConfiguration("local_target_distance")
     grid_visualization_rate_hz = LaunchConfiguration("grid_visualization_rate_hz")
     cmd_vel_topic = LaunchConfiguration("cmd_vel_topic")
+    waypoints_file = LaunchConfiguration("waypoints_file")
 
     fast_anchor_launch = PathJoinSubstitution([
         FindPackageShare("fast_anchor_bringup"),
@@ -91,6 +92,35 @@ def generate_launch_description():
             description="SCAN occupancy visualization rate; 0 disables it on headless platforms",
         ),
         DeclareLaunchArgument("cmd_vel_topic", default_value="/cmd_vel"),
+        DeclareLaunchArgument(
+            "waypoints_file",
+            default_value="",
+            description=(
+                "ROS 2 parameter YAML for waypoint_mission_manager; an empty value keeps "
+                "the normal single-goal mode"
+            ),
+        ),
+        DeclareLaunchArgument("waypoint_status_topic", default_value="/waypoint_mission/status"),
+        DeclareLaunchArgument(
+            "waypoint_xy_tolerance",
+            default_value="0.5",
+            description="XY arrival tolerance for advancing to the next waypoint",
+        ),
+        DeclareLaunchArgument(
+            "waypoint_z_tolerance",
+            default_value="-1.0",
+            description="Z arrival tolerance; a negative value disables the Z check",
+        ),
+        DeclareLaunchArgument(
+            "waypoint_hold_time",
+            default_value="0.5",
+            description="Time that odometry must remain inside the arrival tolerance",
+        ),
+        DeclareLaunchArgument(
+            "waypoint_loop",
+            default_value="false",
+            description="Restart from the first waypoint after completing the mission",
+        ),
         DeclareLaunchArgument("controller_mode", default_value="closed_loop"),
         DeclareLaunchArgument(
             "lidar_model",
@@ -161,6 +191,35 @@ def generate_launch_description():
                     "tomogram_cost_enabled": False,
                     "publish_path_topic": global_path_topic,
                     "publish_alias_path_topic": "",
+                },
+            ],
+        ),
+        Node(
+            package="navigation_bringup",
+            executable="waypoint_mission_manager",
+            name="waypoint_mission_manager",
+            output="screen",
+            condition=IfCondition(PythonExpression(["'", waypoints_file, "' != ''"])),
+            parameters=[
+                waypoints_file,
+                {
+                    "use_sim_time": ParameterValue(use_sim_time, value_type=bool),
+                    "frame_id": map_frame,
+                    "odom_topic": localization_pose_topic,
+                    "goal_topic": goal_topic,
+                    "status_topic": LaunchConfiguration("waypoint_status_topic"),
+                    "xy_tolerance": ParameterValue(
+                        LaunchConfiguration("waypoint_xy_tolerance"), value_type=float
+                    ),
+                    "z_tolerance": ParameterValue(
+                        LaunchConfiguration("waypoint_z_tolerance"), value_type=float
+                    ),
+                    "hold_time": ParameterValue(
+                        LaunchConfiguration("waypoint_hold_time"), value_type=float
+                    ),
+                    "loop": ParameterValue(
+                        LaunchConfiguration("waypoint_loop"), value_type=bool
+                    ),
                 },
             ],
         ),

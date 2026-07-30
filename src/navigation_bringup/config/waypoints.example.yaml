@@ -1,0 +1,4 @@
+waypoint_mission_manager:
+  ros__parameters:
+    # Flat x, y, z triples in the map frame.
+    waypoints: [1.0, 0.0, 0.3, 2.0, 1.0, 0.3, 3.0, 0.0, 0.3]
