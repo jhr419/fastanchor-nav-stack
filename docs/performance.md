@@ -84,3 +84,60 @@ If the platform still saturates, first run headless with
 `grid_visualization_rate_hz:=0`. Only after measuring that result should ICP rate,
 map resolution, or point-cloud leaf sizes be changed, because those knobs alter
 localization or collision behavior.
+
+## Runtime map diagnostics
+
+The integrated launch now enables a five-second runtime diagnostic window by
+default. It measures the unique local obstacle-map fusion rate separately from
+the fixed-rate aligned-cloud transport and from the optional occupancy
+visualization. This matters because FastAnchor preserves the acquisition stamp
+when it republishes a cached cloud; those repeats are transport frames, not new
+map observations.
+
+Each window writes two ROS log records:
+
+- `[RuntimeLog]` reports `OK` or `DEGRADED`, input/prepared/fusion rates,
+  coalesced frames, process and whole-system CPU, memory, RSS, load average,
+  Linux CPU/memory pressure, visualization rate, and an automatic `reason`.
+- `[RuntimeLog][Stages]` reports average/maximum time for point-cloud decoding,
+  filtering, sliding-map updates, depth projection, raycasting/inflation, fusion
+  queue delay, and occupancy visualization serialization.
+
+The default fusion target is 10 Hz with a 90% acceptance tolerance, matching a
+typical MID360 unique acquisition rate. Change it to the actual sensor contract,
+not the cached publication rate:
+
+```bash
+ros2 launch navigation_bringup navigation_system.launch.py \
+  map_pcd_path:=$PWD/maps/map_preprocessed2.pcd \
+  runtime_log_map_target_rate_hz:=10.0 \
+  runtime_log_report_interval_sec:=5.0 \
+  runtime_log_csv_path:=/tmp/navigation-runtime.csv
+```
+
+`runtime_log_csv_path` is empty by default; ROS logs are still persisted by the
+normal ROS 2 logging system. The CSV is append-only and contains one row per
+window for plotting or comparing runs. Set `runtime_log_enabled:=false` to
+disable both resource sampling and stage reports.
+
+Common reason values are:
+
+| Reason | Interpretation |
+|---|---|
+| `upstream_unique_input_low` | The planner received fewer genuinely new sensor frames than required. |
+| `upstream_repeated_cloud` | A significant part of the input was cached output with a repeated acquisition stamp. |
+| `missing_sensor_pose` | Clouds arrived before a valid pose, so they could not be fused. |
+| `empty_or_fully_filtered_input` | The cloud was empty or no point survived local range/finite-value filtering. |
+| `fusion_queue_coalescing` | New prepared frames replaced pending data before the 20 Hz fusion callback ran. |
+| `slow_pointcloud_*` / `slow_sliding_map` | Input conversion, filtering, or map shifting consumed the frame budget. |
+| `slow_raycast_and_inflation` | Ray traversal and occupancy/inflation updates dominated the frame budget. |
+| `executor_callback_delay` | The single-threaded planner executor delayed fusion even though map work was ready. |
+| `visualization_worker_backlog` / `visualization_serialization` | The bounded visualization worker dropped old snapshots, or snapshot/PointCloud2 conversion consumed too much of its period. |
+| `visualization_timer_or_executor_delay` | Visualization work itself was short, but the single-threaded timer was invoked too slowly. |
+| `system_cpu_saturation` / `cpu_scheduling_pressure` | Other work on the machine competed for CPU time. |
+| `planner_process_cpu_core_saturation` | `scan_planner_node` itself used at least about one full CPU core while the rate was low. |
+| `memory_pressure` | Available memory or Linux memory-stall pressure crossed the warning threshold. |
+
+Visualization is shown as `inactive` when neither occupancy topic has a
+subscriber. That is not a map-rate failure: collision queries use the internal
+fusion buffer and do not require RViz point-cloud publication.

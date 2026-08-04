@@ -1,8 +1,12 @@
 #include "plan_env/grid_map.h"
+#include <array>
 #include <cmath>
 #include <chrono>
+#include <iomanip>
 #include <limits>
+#include <sstream>
 #include <string>
+#include <unistd.h>
 #include <geometry_msgs/msg/transform_stamped.hpp>
 
 namespace
@@ -13,6 +17,40 @@ void load_parameter(rclcpp::Node *node, const std::string &name, T &value, const
   if (!node->has_parameter(name))
     node->declare_parameter<T>(name, default_value);
   node->get_parameter(name, value);
+}
+
+double elapsedMilliseconds(const std::chrono::steady_clock::time_point &start)
+{
+  return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+}
+
+void updateAtomicMaximum(std::atomic<uint64_t> &maximum, uint64_t value)
+{
+  uint64_t current = maximum.load(std::memory_order_relaxed);
+  while (current < value &&
+         !maximum.compare_exchange_weak(current, value, std::memory_order_relaxed))
+  {
+  }
+}
+
+uint64_t readPressureTotal(const char *path)
+{
+  std::ifstream input(path);
+  std::string line;
+  if (!std::getline(input, line) || line.rfind("some ", 0) != 0)
+    return 0;
+  const std::string key = "total=";
+  const size_t position = line.find(key);
+  if (position == std::string::npos)
+    return 0;
+  try
+  {
+    return std::stoull(line.substr(position + key.size()));
+  }
+  catch (const std::exception &)
+  {
+    return 0;
+  }
 }
 }  // namespace
 
@@ -26,6 +64,410 @@ GridMap::~GridMap()
   visualization_cv_.notify_one();
   if (visualization_worker_.joinable())
     visualization_worker_.join();
+}
+
+void GridMap::initializeRuntimeDiagnostics()
+{
+  if (!runtime_log_enabled_)
+    return;
+
+  runtime_window_start_ = std::chrono::steady_clock::now();
+  previous_resource_sample_time_ = runtime_window_start_;
+  (void)sampleSystemResources();
+
+  if (!runtime_csv_path_.empty())
+  {
+    runtime_csv_stream_.open(runtime_csv_path_, std::ios::out | std::ios::app);
+    if (!runtime_csv_stream_)
+    {
+      RCLCPP_ERROR(node_->get_logger(),
+                   "[RuntimeLog] cannot open CSV path '%s'; ROS log output remains enabled",
+                   runtime_csv_path_.c_str());
+    }
+    else if (runtime_csv_stream_.tellp() == std::streampos(0))
+    {
+      runtime_csv_stream_
+          << "ros_time_s,window_s,status,fusion_status,visualization_status,reasons,input_hz,"
+             "unique_input_hz,prepared_hz,fusion_hz,"
+             "target_hz,duplicate_frames,no_pose_frames,empty_frames,coalesced_frames,avg_input_points,"
+             "avg_prepared_points,decode_avg_ms,decode_max_ms,filter_avg_ms,filter_max_ms,sliding_avg_ms,"
+             "sliding_max_ms,projection_avg_ms,projection_max_ms,raycast_avg_ms,raycast_max_ms,"
+             "fusion_avg_ms,fusion_max_ms,queue_avg_ms,queue_max_ms,visualization_hz,visualization_target_hz,"
+             "visualization_dropped,visualization_avg_ms,visualization_max_ms,visualization_avg_points,"
+             "process_cpu_percent,system_cpu_percent,memory_percent,process_rss_mb,load_1m,"
+             "cpu_pressure_percent,memory_pressure_percent\n";
+      runtime_csv_stream_.flush();
+    }
+  }
+
+  const auto period = std::chrono::duration_cast<std::chrono::nanoseconds>(
+      std::chrono::duration<double>(runtime_report_interval_sec_));
+  runtime_diagnostics_timer_ = node_->create_wall_timer(
+      period, std::bind(&GridMap::runtimeDiagnosticsCallback, this));
+  RCLCPP_INFO(node_->get_logger(),
+              "[RuntimeLog] enabled: map target=%.1f Hz tolerance=%.0f%% report=%.1f s csv=%s",
+              runtime_map_target_rate_hz_, runtime_rate_tolerance_ * 100.0,
+              runtime_report_interval_sec_, runtime_csv_path_.empty() ? "disabled" : runtime_csv_path_.c_str());
+}
+
+GridMap::SystemSample GridMap::sampleSystemResources()
+{
+  SystemSample sample;
+  const auto now = std::chrono::steady_clock::now();
+
+  uint64_t system_total = 0;
+  uint64_t system_idle = 0;
+  {
+    std::ifstream stat("/proc/stat");
+    std::string cpu;
+    std::array<uint64_t, 10> ticks{};
+    if (stat >> cpu && cpu == "cpu")
+    {
+      for (auto &tick : ticks)
+        stat >> tick;
+      for (const uint64_t tick : ticks)
+        system_total += tick;
+      system_idle = ticks[3] + ticks[4];
+    }
+  }
+
+  uint64_t process_ticks = 0;
+  {
+    std::ifstream stat("/proc/self/stat");
+    std::string line;
+    std::getline(stat, line);
+    const size_t command_end = line.rfind(')');
+    if (command_end != std::string::npos && command_end + 2 < line.size())
+    {
+      std::istringstream fields(line.substr(command_end + 2));
+      std::vector<std::string> values;
+      std::string value;
+      while (fields >> value)
+        values.push_back(value);
+      // values[0] is field 3 (state); utime/stime are fields 14 and 15.
+      if (values.size() > 12)
+      {
+        try
+        {
+          process_ticks = std::stoull(values[11]) + std::stoull(values[12]);
+        }
+        catch (const std::exception &)
+        {
+          process_ticks = 0;
+        }
+      }
+    }
+  }
+
+  uint64_t memory_total_kb = 0;
+  uint64_t memory_available_kb = 0;
+  {
+    std::ifstream meminfo("/proc/meminfo");
+    std::string line;
+    while (std::getline(meminfo, line))
+    {
+      std::istringstream fields(line);
+      std::string key;
+      uint64_t value = 0;
+      fields >> key >> value;
+      if (key == "MemTotal:")
+        memory_total_kb = value;
+      else if (key == "MemAvailable:")
+        memory_available_kb = value;
+    }
+  }
+
+  {
+    std::ifstream status("/proc/self/status");
+    std::string key;
+    while (status >> key)
+    {
+      if (key == "VmRSS:")
+      {
+        uint64_t rss_kb = 0;
+        std::string unit;
+        status >> rss_kb >> unit;
+        sample.process_rss_mb = static_cast<double>(rss_kb) / 1024.0;
+        break;
+      }
+      std::string remainder;
+      std::getline(status, remainder);
+    }
+  }
+
+  {
+    std::ifstream loadavg("/proc/loadavg");
+    loadavg >> sample.load_1m;
+  }
+
+  const uint64_t cpu_pressure_us = readPressureTotal("/proc/pressure/cpu");
+  const uint64_t memory_pressure_us = readPressureTotal("/proc/pressure/memory");
+  const double elapsed_sec = std::chrono::duration<double>(now - previous_resource_sample_time_).count();
+  if (have_previous_resource_sample_ && elapsed_sec > 0.0)
+  {
+    const uint64_t total_delta = system_total >= previous_system_total_ticks_
+                                     ? system_total - previous_system_total_ticks_
+                                     : 0;
+    const uint64_t idle_delta = system_idle >= previous_system_idle_ticks_
+                                    ? system_idle - previous_system_idle_ticks_
+                                    : 0;
+    if (total_delta > 0)
+      sample.system_cpu_percent =
+          100.0 * static_cast<double>(total_delta - std::min(total_delta, idle_delta)) /
+          static_cast<double>(total_delta);
+
+    const long clock_ticks = sysconf(_SC_CLK_TCK);
+    const uint64_t process_delta = process_ticks >= previous_process_ticks_
+                                       ? process_ticks - previous_process_ticks_
+                                       : 0;
+    if (clock_ticks > 0)
+      sample.process_cpu_percent =
+          100.0 * static_cast<double>(process_delta) /
+          (static_cast<double>(clock_ticks) * elapsed_sec);
+
+    const double elapsed_us = elapsed_sec * 1e6;
+    if (cpu_pressure_us >= previous_cpu_pressure_us_)
+      sample.cpu_pressure_percent =
+          100.0 * static_cast<double>(cpu_pressure_us - previous_cpu_pressure_us_) / elapsed_us;
+    if (memory_pressure_us >= previous_memory_pressure_us_)
+      sample.memory_pressure_percent =
+          100.0 * static_cast<double>(memory_pressure_us - previous_memory_pressure_us_) / elapsed_us;
+    sample.valid = true;
+  }
+
+  if (memory_total_kb > 0)
+    sample.memory_percent =
+        100.0 * static_cast<double>(memory_total_kb - std::min(memory_total_kb, memory_available_kb)) /
+        static_cast<double>(memory_total_kb);
+
+  previous_system_total_ticks_ = system_total;
+  previous_system_idle_ticks_ = system_idle;
+  previous_process_ticks_ = process_ticks;
+  previous_cpu_pressure_us_ = cpu_pressure_us;
+  previous_memory_pressure_us_ = memory_pressure_us;
+  previous_resource_sample_time_ = now;
+  have_previous_resource_sample_ = system_total > 0;
+  return sample;
+}
+
+void GridMap::runtimeDiagnosticsCallback()
+{
+  const auto now = std::chrono::steady_clock::now();
+  const double window_sec = std::chrono::duration<double>(now - runtime_window_start_).count();
+  if (window_sec <= 0.0)
+    return;
+
+  const RuntimeMetrics metrics = runtime_metrics_;
+  runtime_metrics_ = RuntimeMetrics{};
+  runtime_window_start_ = now;
+
+  const uint64_t visualization_requested =
+      visualization_requested_.exchange(0, std::memory_order_relaxed);
+  const uint64_t visualization_dropped =
+      visualization_dropped_.exchange(0, std::memory_order_relaxed);
+  const uint64_t visualization_published =
+      visualization_published_.exchange(0, std::memory_order_relaxed);
+  const uint64_t visualization_points =
+      visualization_points_.exchange(0, std::memory_order_relaxed);
+  const uint64_t visualization_work_us =
+      visualization_work_us_.exchange(0, std::memory_order_relaxed);
+  const uint64_t visualization_work_max_us =
+      visualization_work_max_us_.exchange(0, std::memory_order_relaxed);
+  const SystemSample system = sampleSystemResources();
+
+  const auto rate = [window_sec](uint64_t count) {
+    return static_cast<double>(count) / window_sec;
+  };
+  const auto average = [](double sum, uint64_t count) {
+    return count == 0 ? 0.0 : sum / static_cast<double>(count);
+  };
+  const double input_hz = rate(metrics.input_frames);
+  const double unique_input_hz = rate(metrics.unique_input_frames);
+  const double prepared_hz = rate(metrics.prepared_frames);
+  const double fusion_hz = rate(metrics.fusion_frames);
+  const double visualization_hz = rate(visualization_published);
+  const double decode_avg_ms = average(metrics.decode_ms_sum, metrics.unique_input_frames);
+  const double filter_avg_ms = average(metrics.filter_ms_sum, metrics.unique_input_frames);
+  const double sliding_avg_ms = average(metrics.sliding_ms_sum, metrics.unique_input_frames);
+  const double projection_avg_ms = average(metrics.projection_ms_sum, metrics.fusion_frames);
+  const double raycast_avg_ms = average(metrics.raycast_ms_sum, metrics.fusion_frames);
+  const double fusion_avg_ms = average(metrics.fusion_ms_sum, metrics.fusion_frames);
+  const double queue_avg_ms = average(metrics.queue_wait_ms_sum, metrics.fusion_frames);
+  const double visualization_avg_ms = visualization_requested == 0
+                                          ? 0.0
+                                          : static_cast<double>(visualization_work_us) /
+                                                (1000.0 * visualization_requested);
+  const double visualization_max_ms = static_cast<double>(visualization_work_max_us) / 1000.0;
+  const double average_input_points = average(
+      static_cast<double>(metrics.input_points), metrics.unique_input_frames);
+  const double average_prepared_points = average(
+      static_cast<double>(metrics.prepared_points), metrics.prepared_frames);
+  const double average_visualization_points = average(
+      static_cast<double>(visualization_points), visualization_published);
+
+  const double required_hz = runtime_map_target_rate_hz_ * runtime_rate_tolerance_;
+  const bool fusion_rate_ok = fusion_hz >= required_hz;
+  const bool visualization_active = visualization_requested > 0;
+  const bool visualization_rate_ok = !visualization_active ||
+      visualization_hz >= runtime_visualization_target_rate_hz_ * runtime_rate_tolerance_;
+  std::vector<std::string> reasons;
+  const auto add_reason = [&reasons](const std::string &reason) {
+    if (std::find(reasons.begin(), reasons.end(), reason) == reasons.end())
+      reasons.push_back(reason);
+  };
+  if (!fusion_rate_ok)
+  {
+    if (metrics.no_pose_frames > 0)
+      add_reason("missing_sensor_pose");
+    if (unique_input_hz < required_hz)
+      add_reason("upstream_unique_input_low");
+    if (metrics.input_frames > 0 &&
+        static_cast<double>(metrics.duplicate_input_frames) /
+                static_cast<double>(metrics.input_frames) > 0.1)
+      add_reason("upstream_repeated_cloud");
+    if (metrics.empty_input_frames > 0)
+      add_reason("empty_or_fully_filtered_input");
+    if (metrics.coalesced_frames > 0 || prepared_hz > fusion_hz + 0.5)
+      add_reason("fusion_queue_coalescing");
+
+    const double budget_ms = 1000.0 / runtime_map_target_rate_hz_;
+    const std::array<std::pair<const char *, double>, 5> stages{{
+        {"pointcloud_decode", decode_avg_ms},
+        {"pointcloud_filter", filter_avg_ms},
+        {"sliding_map", sliding_avg_ms},
+        {"depth_projection", projection_avg_ms},
+        {"raycast_and_inflation", raycast_avg_ms},
+    }};
+    const auto dominant = std::max_element(
+        stages.begin(), stages.end(),
+        [](const auto &left, const auto &right) { return left.second < right.second; });
+    if (dominant != stages.end() && dominant->second >= budget_ms * 0.35)
+      add_reason(std::string("slow_") + dominant->first);
+    // A fresh frame normally waits up to one 50 ms occupancy-timer period.
+    // Only the excess is evidence that another callback delayed fusion.
+    if (queue_avg_ms >= 50.0 + budget_ms * 0.25)
+      add_reason("executor_callback_delay");
+  }
+
+  if (!visualization_rate_ok)
+  {
+    const double visualization_budget_ms = runtime_visualization_target_rate_hz_ > 0.0
+                                               ? 1000.0 / runtime_visualization_target_rate_hz_
+                                               : 0.0;
+    if (visualization_dropped > 0)
+      add_reason("visualization_worker_backlog");
+    if (visualization_budget_ms > 0.0 && visualization_avg_ms >= visualization_budget_ms * 0.5)
+      add_reason("visualization_serialization");
+    if (visualization_dropped == 0 &&
+        (visualization_budget_ms <= 0.0 || visualization_avg_ms < visualization_budget_ms * 0.5))
+      add_reason("visualization_timer_or_executor_delay");
+  }
+
+  const bool overall_ok = fusion_rate_ok && visualization_rate_ok;
+  if (!overall_ok)
+  {
+    if (system.valid && system.system_cpu_percent >= runtime_cpu_warn_percent_)
+      add_reason("system_cpu_saturation");
+    if (system.valid && system.process_cpu_percent >= 90.0)
+      add_reason("planner_process_cpu_core_saturation");
+    if (system.valid && system.cpu_pressure_percent >= 10.0)
+      add_reason("cpu_scheduling_pressure");
+    if (system.memory_percent >= runtime_memory_warn_percent_ ||
+        (system.valid && system.memory_pressure_percent >= 5.0))
+      add_reason("memory_pressure");
+    if (reasons.empty())
+      add_reason("callback_jitter_or_unmeasured_upstream_drop");
+  }
+
+  std::ostringstream reason_stream;
+  if (reasons.empty())
+  {
+    reason_stream << "none";
+  }
+  else
+  {
+    for (size_t i = 0; i < reasons.size(); ++i)
+    {
+      if (i > 0)
+        reason_stream << ';';
+      reason_stream << reasons[i];
+    }
+  }
+  const std::string reason_text = reason_stream.str();
+  const char *status = overall_ok ? "OK" : "DEGRADED";
+  const char *fusion_status = fusion_rate_ok ? "OK" : "DEGRADED";
+  const char *visualization_status = !visualization_active
+                                         ? "inactive"
+                                         : (visualization_rate_ok ? "OK" : "DEGRADED");
+
+  if (overall_ok)
+  {
+    RCLCPP_INFO(
+        node_->get_logger(),
+        "[RuntimeLog] map=%s fusion=%s(%.2f/%.2fHz) input=%.2fHz unique=%.2fHz prepared=%.2fHz "
+        "coalesced=%lu reason=%s process_cpu=%.1f%% system_cpu=%.1f%% memory=%.1f%% rss=%.1fMiB "
+        "load1=%.2f cpu_psi=%.1f%% mem_psi=%.1f%% visualization=%s(%.2f/%.2fHz,dropped=%lu)",
+        status, fusion_status, fusion_hz, runtime_map_target_rate_hz_, input_hz, unique_input_hz, prepared_hz,
+        static_cast<unsigned long>(metrics.coalesced_frames), reason_text.c_str(),
+        system.process_cpu_percent, system.system_cpu_percent, system.memory_percent,
+        system.process_rss_mb, system.load_1m, system.cpu_pressure_percent,
+        system.memory_pressure_percent, visualization_status, visualization_hz,
+        runtime_visualization_target_rate_hz_, static_cast<unsigned long>(visualization_dropped));
+  }
+  else
+  {
+    RCLCPP_WARN(
+        node_->get_logger(),
+        "[RuntimeLog] map=%s fusion=%s(%.2f/%.2fHz) input=%.2fHz unique=%.2fHz prepared=%.2fHz "
+        "coalesced=%lu reason=%s process_cpu=%.1f%% system_cpu=%.1f%% memory=%.1f%% rss=%.1fMiB "
+        "load1=%.2f cpu_psi=%.1f%% mem_psi=%.1f%% visualization=%s(%.2f/%.2fHz,dropped=%lu)",
+        status, fusion_status, fusion_hz, runtime_map_target_rate_hz_, input_hz, unique_input_hz, prepared_hz,
+        static_cast<unsigned long>(metrics.coalesced_frames), reason_text.c_str(),
+        system.process_cpu_percent, system.system_cpu_percent, system.memory_percent,
+        system.process_rss_mb, system.load_1m, system.cpu_pressure_percent,
+        system.memory_pressure_percent, visualization_status, visualization_hz,
+        runtime_visualization_target_rate_hz_, static_cast<unsigned long>(visualization_dropped));
+  }
+
+  RCLCPP_INFO(
+      node_->get_logger(),
+      "[RuntimeLog][Stages] points=%.0f->%.0f decode=%.2f/%.2fms filter=%.2f/%.2fms "
+      "sliding=%.2f/%.2fms projection=%.2f/%.2fms raycast=%.2f/%.2fms fusion=%.2f/%.2fms "
+      "queue=%.2f/%.2fms visualization=%.2f/%.2fms vis_points=%.0f duplicates=%lu no_pose=%lu empty=%lu",
+      average_input_points, average_prepared_points,
+      decode_avg_ms, metrics.decode_ms_max, filter_avg_ms, metrics.filter_ms_max,
+      sliding_avg_ms, metrics.sliding_ms_max, projection_avg_ms, metrics.projection_ms_max,
+      raycast_avg_ms, metrics.raycast_ms_max, fusion_avg_ms, metrics.fusion_ms_max,
+      queue_avg_ms, metrics.queue_wait_ms_max, visualization_avg_ms, visualization_max_ms,
+      average_visualization_points, static_cast<unsigned long>(metrics.duplicate_input_frames),
+      static_cast<unsigned long>(metrics.no_pose_frames),
+      static_cast<unsigned long>(metrics.empty_input_frames));
+
+  if (runtime_csv_stream_)
+  {
+    runtime_csv_stream_
+        << std::fixed << std::setprecision(6) << node_->now().seconds() << ',' << window_sec << ','
+        << status << ',' << fusion_status << ',' << visualization_status << ',' << reason_text << ','
+        << input_hz << ',' << unique_input_hz << ','
+        << prepared_hz << ',' << fusion_hz << ',' << runtime_map_target_rate_hz_ << ','
+        << metrics.duplicate_input_frames << ',' << metrics.no_pose_frames << ','
+        << metrics.empty_input_frames << ',' << metrics.coalesced_frames << ','
+        << average_input_points << ',' << average_prepared_points << ','
+        << decode_avg_ms << ',' << metrics.decode_ms_max << ','
+        << filter_avg_ms << ',' << metrics.filter_ms_max << ','
+        << sliding_avg_ms << ',' << metrics.sliding_ms_max << ','
+        << projection_avg_ms << ',' << metrics.projection_ms_max << ','
+        << raycast_avg_ms << ',' << metrics.raycast_ms_max << ','
+        << fusion_avg_ms << ',' << metrics.fusion_ms_max << ','
+        << queue_avg_ms << ',' << metrics.queue_wait_ms_max << ','
+        << visualization_hz << ',' << runtime_visualization_target_rate_hz_ << ','
+        << visualization_dropped << ',' << visualization_avg_ms << ',' << visualization_max_ms << ','
+        << average_visualization_points << ',' << system.process_cpu_percent << ','
+        << system.system_cpu_percent << ',' << system.memory_percent << ',' << system.process_rss_mb << ','
+        << system.load_1m << ',' << system.cpu_pressure_percent << ','
+        << system.memory_pressure_percent << '\n';
+    runtime_csv_stream_.flush();
+  }
 }
 
 void GridMap::initMap(rclcpp::Node *node)
@@ -71,6 +513,19 @@ void GridMap::initMap(rclcpp::Node *node)
   load_parameter(node_, "grid_map.show_occ_time", mp_.show_occ_time_, false);
   double visualization_rate_hz;
   load_parameter(node_, "grid_map.visualization_rate_hz", visualization_rate_hz, 5.0);
+  runtime_visualization_target_rate_hz_ = std::max(0.0, visualization_rate_hz);
+
+  load_parameter(node_, "runtime_log.enabled", runtime_log_enabled_, true);
+  load_parameter(node_, "runtime_log.report_interval_sec", runtime_report_interval_sec_, 5.0);
+  load_parameter(node_, "runtime_log.map_target_rate_hz", runtime_map_target_rate_hz_, 10.0);
+  load_parameter(node_, "runtime_log.rate_tolerance", runtime_rate_tolerance_, 0.9);
+  load_parameter(node_, "runtime_log.cpu_warn_percent", runtime_cpu_warn_percent_, 85.0);
+  load_parameter(node_, "runtime_log.memory_warn_percent", runtime_memory_warn_percent_, 90.0);
+  load_parameter(node_, "runtime_log.csv_path", runtime_csv_path_, std::string(""));
+
+  runtime_report_interval_sec_ = std::max(1.0, runtime_report_interval_sec_);
+  runtime_map_target_rate_hz_ = std::max(0.1, runtime_map_target_rate_hz_);
+  runtime_rate_tolerance_ = std::clamp(runtime_rate_tolerance_, 0.1, 1.0);
 
   load_parameter(node_, "grid_map.frame_id", mp_.frame_id_, string("world"));
   load_parameter(node_, "grid_map.sliding_map_frame_id", mp_.sliding_map_frame_id_, string("sliding_map"));
@@ -210,6 +665,8 @@ void GridMap::initMap(rclcpp::Node *node)
   md_.max_fuse_time_ = 0.0;
   md_.local_bound_min_ = mp_.map_bound_min_idx_;
   md_.local_bound_max_ = mp_.map_bound_max_idx_;
+
+  initializeRuntimeDiagnostics();
 
   // rand_noise_ = uniform_real_distribution<double>(-0.2, 0.2);
   // rand_noise2_ = normal_distribution<double>(0, 0.2);
@@ -767,6 +1224,9 @@ void GridMap::queueVisualizationSnapshot()
   if (!publish_occupancy && !publish_inflated)
     return;
 
+  const auto work_start = std::chrono::steady_clock::now();
+  visualization_requested_.fetch_add(1, std::memory_order_relaxed);
+
   VisualizationSnapshot snapshot;
   if (publish_occupancy)
     snapshot.occupancy = md_.occupancy_buffer_;
@@ -789,8 +1249,15 @@ void GridMap::queueVisualizationSnapshot()
     std::lock_guard<std::mutex> lock(visualization_mutex_);
     // Keep only the newest frame when serialization is slower than the requested
     // rate. Visualization must never build an unbounded backlog behind planning.
+    if (pending_visualization_)
+      visualization_dropped_.fetch_add(1, std::memory_order_relaxed);
     pending_visualization_ = std::move(snapshot);
   }
+  const uint64_t work_us = static_cast<uint64_t>(
+      std::chrono::duration_cast<std::chrono::microseconds>(
+          std::chrono::steady_clock::now() - work_start).count());
+  visualization_work_us_.fetch_add(work_us, std::memory_order_relaxed);
+  updateAtomicMaximum(visualization_work_max_us_, work_us);
   visualization_cv_.notify_one();
 }
 
@@ -809,6 +1276,8 @@ void GridMap::visualizationWorkerLoop()
       snapshot = std::move(*pending_visualization_);
       pending_visualization_.reset();
     }
+
+    const auto work_start = std::chrono::steady_clock::now();
 
     pcl::PointCloud<pcl::PointXYZ> occupancy_cloud;
     pcl::PointCloud<pcl::PointXYZ> inflated_cloud;
@@ -859,6 +1328,15 @@ void GridMap::visualizationWorkerLoop()
       publish_cloud(occupancy_cloud, map_pub_);
     if (snapshot.publish_inflated)
       publish_cloud(inflated_cloud, map_inf_pub_);
+
+    const uint64_t point_count = occupancy_cloud.size() + inflated_cloud.size();
+    const uint64_t work_us = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - work_start).count());
+    visualization_published_.fetch_add(1, std::memory_order_relaxed);
+    visualization_points_.fetch_add(point_count, std::memory_order_relaxed);
+    visualization_work_us_.fetch_add(work_us, std::memory_order_relaxed);
+    updateAtomicMaximum(visualization_work_max_us_, work_us);
   }
 }
 
@@ -867,14 +1345,34 @@ void GridMap::updateOccupancyCallback()
   if (!md_.occ_need_update_)
     return;
 
+  const auto fusion_start = std::chrono::steady_clock::now();
+  if (pending_map_ready_time_valid_)
+  {
+    const double queue_wait_ms = std::chrono::duration<double, std::milli>(
+        fusion_start - pending_map_ready_time_).count();
+    runtime_metrics_.queue_wait_ms_sum += queue_wait_ms;
+    runtime_metrics_.queue_wait_ms_max = std::max(runtime_metrics_.queue_wait_ms_max, queue_wait_ms);
+  }
+
   /* update occupancy */
   // ros::Time t1, t2, t3, t4;
   // t1 = ros::Time::now();
 
-  if (!md_.use_cloud_update_)
+  const auto projection_start = std::chrono::steady_clock::now();
+  const bool depth_update = !md_.use_cloud_update_;
+  if (depth_update)
     projectDepthImage();
+  if (depth_update)
+    runtime_metrics_.prepared_points += static_cast<uint64_t>(std::max(0, md_.proj_points_cnt));
+  const double projection_ms = elapsedMilliseconds(projection_start);
+  runtime_metrics_.projection_ms_sum += projection_ms;
+  runtime_metrics_.projection_ms_max = std::max(runtime_metrics_.projection_ms_max, projection_ms);
   // t2 = ros::Time::now();
+  const auto raycast_start = std::chrono::steady_clock::now();
   raycastProcess();
+  const double raycast_ms = elapsedMilliseconds(raycast_start);
+  runtime_metrics_.raycast_ms_sum += raycast_ms;
+  runtime_metrics_.raycast_ms_max = std::max(runtime_metrics_.raycast_ms_max, raycast_ms);
   // t3 = ros::Time::now();
 
   // t4 = ros::Time::now();
@@ -891,6 +1389,12 @@ void GridMap::updateOccupancyCallback()
 
   md_.occ_need_update_ = false;
   md_.use_cloud_update_ = false;
+  pending_map_ready_time_valid_ = false;
+
+  const double fusion_ms = elapsedMilliseconds(fusion_start);
+  runtime_metrics_.fusion_frames++;
+  runtime_metrics_.fusion_ms_sum += fusion_ms;
+  runtime_metrics_.fusion_ms_max = std::max(runtime_metrics_.fusion_ms_max, fusion_ms);
 }
 
 void GridMap::depthPoseCallback(const sensor_msgs::msg::Image::ConstSharedPtr &img,
@@ -899,7 +1403,11 @@ void GridMap::depthPoseCallback(const sensor_msgs::msg::Image::ConstSharedPtr &i
   if (mp_.sensor_type_ != "depth")
     return;
 
+  runtime_metrics_.input_frames++;
+  runtime_metrics_.unique_input_frames++;
+
   /* get depth image */
+  const auto decode_start = std::chrono::steady_clock::now();
   cv_bridge::CvImagePtr cv_ptr;
   cv_ptr = cv_bridge::toCvCopy(img, img->encoding);
 
@@ -908,6 +1416,11 @@ void GridMap::depthPoseCallback(const sensor_msgs::msg::Image::ConstSharedPtr &i
     (cv_ptr->image).convertTo(cv_ptr->image, CV_16UC1, mp_.k_depth_scaling_factor_);
   }
   cv_ptr->image.copyTo(md_.depth_image_);
+  const double decode_ms = elapsedMilliseconds(decode_start);
+  runtime_metrics_.decode_ms_sum += decode_ms;
+  runtime_metrics_.decode_ms_max = std::max(runtime_metrics_.decode_ms_max, decode_ms);
+  runtime_metrics_.input_points += static_cast<uint64_t>(
+      std::max(0, md_.depth_image_.rows) * std::max(0, md_.depth_image_.cols));
 
   // std::cout << "depth: " << md_.depth_image_.cols << ", " << md_.depth_image_.rows << std::endl;
 
@@ -916,7 +1429,10 @@ void GridMap::depthPoseCallback(const sensor_msgs::msg::Image::ConstSharedPtr &i
   Eigen::Quaterniond ray_q(sensor_pose.orientation.w, sensor_pose.orientation.x,
                            sensor_pose.orientation.y, sensor_pose.orientation.z);
   if (ray_q.norm() < 1e-6)
+  {
+    runtime_metrics_.no_pose_frames++;
     return;
+  }
   ray_q.normalize();
 
   Eigen::Vector3d ray_pos(sensor_pose.position.x, sensor_pose.position.y, sensor_pose.position.z);
@@ -943,12 +1459,21 @@ void GridMap::depthPoseCallback(const sensor_msgs::msg::Image::ConstSharedPtr &i
   md_.ray_pos_ = ray_pos;
   md_.ray_q_ = ray_q;
   md_.use_cloud_update_ = false;
+  const auto sliding_start = std::chrono::steady_clock::now();
   updateSlidingMap(md_.ray_pos_);
+  const double sliding_ms = elapsedMilliseconds(sliding_start);
+  runtime_metrics_.sliding_ms_sum += sliding_ms;
+  runtime_metrics_.sliding_ms_max = std::max(runtime_metrics_.sliding_ms_max, sliding_ms);
   if (isInMap(md_.ray_pos_))
   {
     md_.has_ray_pose_ = true;
     md_.update_num_ += 1;
+    if (md_.occ_need_update_)
+      runtime_metrics_.coalesced_frames++;
     md_.occ_need_update_ = true;
+    runtime_metrics_.prepared_frames++;
+    pending_map_ready_time_ = std::chrono::steady_clock::now();
+    pending_map_ready_time_valid_ = true;
   }
   else
   {
@@ -996,8 +1521,11 @@ void GridMap::cloudCallback(const sensor_msgs::msg::PointCloud2::ConstSharedPtr 
   if (mp_.sensor_type_ != "lidar")
     return;
 
+  runtime_metrics_.input_frames++;
+
   if (!md_.has_ray_pose_)
   {
+    runtime_metrics_.no_pose_frames++;
     RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000,
                          "[GridMap] no sensor_pose received for lidar cloud update");
     return;
@@ -1005,27 +1533,45 @@ void GridMap::cloudCallback(const sensor_msgs::msg::PointCloud2::ConstSharedPtr 
 
   const rclcpp::Time cloud_stamp(img->header.stamp);
   if (cloud_stamp.nanoseconds() != 0 && cloud_stamp == last_cloud_stamp_)
+  {
+    runtime_metrics_.duplicate_input_frames++;
     return;
+  }
   if (cloud_stamp.nanoseconds() != 0)
     last_cloud_stamp_ = cloud_stamp;
 
+  runtime_metrics_.unique_input_frames++;
+
+  const auto decode_start = std::chrono::steady_clock::now();
   pcl::PointCloud<pcl::PointXYZ> latest_cloud;
   pcl::fromROSMsg(*img, latest_cloud);
+  const double decode_ms = elapsedMilliseconds(decode_start);
+  runtime_metrics_.decode_ms_sum += decode_ms;
+  runtime_metrics_.decode_ms_max = std::max(runtime_metrics_.decode_ms_max, decode_ms);
+  runtime_metrics_.input_points += latest_cloud.points.size();
 
   md_.has_cloud_ = true;
 
   if (latest_cloud.points.size() == 0)
+  {
+    runtime_metrics_.empty_input_frames++;
     return;
+  }
 
   const Eigen::Matrix3d sensor_r = md_.ray_q_.toRotationMatrix();
   const Eigen::Vector3d ray_pos = md_.ray_pos_;
   if (!std::isfinite(ray_pos.x()) || !std::isfinite(ray_pos.y()) || !std::isfinite(ray_pos.z()))
     return;
 
+  const auto sliding_start = std::chrono::steady_clock::now();
   updateSlidingMap(ray_pos);
+  const double sliding_ms = elapsedMilliseconds(sliding_start);
+  runtime_metrics_.sliding_ms_sum += sliding_ms;
+  runtime_metrics_.sliding_ms_max = std::max(runtime_metrics_.sliding_ms_max, sliding_ms);
 
   md_.proj_points_cnt = 0;
 
+  const auto filter_start = std::chrono::steady_clock::now();
   for (size_t i = 0; i < latest_cloud.points.size(); ++i)
   {
     const pcl::PointXYZ &pt = latest_cloud.points[i];
@@ -1057,12 +1603,24 @@ void GridMap::cloudCallback(const sensor_msgs::msg::PointCloud2::ConstSharedPtr 
 
     md_.proj_points_cnt++;
   }
+  const double filter_ms = elapsedMilliseconds(filter_start);
+  runtime_metrics_.filter_ms_sum += filter_ms;
+  runtime_metrics_.filter_ms_max = std::max(runtime_metrics_.filter_ms_max, filter_ms);
 
   if (md_.proj_points_cnt == 0)
+  {
+    runtime_metrics_.empty_input_frames++;
     return;
+  }
 
+  if (md_.occ_need_update_)
+    runtime_metrics_.coalesced_frames++;
   md_.use_cloud_update_ = true;
   md_.occ_need_update_ = true;
+  runtime_metrics_.prepared_frames++;
+  runtime_metrics_.prepared_points += static_cast<uint64_t>(md_.proj_points_cnt);
+  pending_map_ready_time_ = std::chrono::steady_clock::now();
+  pending_map_ready_time_valid_ = true;
 }
 
 void GridMap::publishMap()

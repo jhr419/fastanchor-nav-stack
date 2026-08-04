@@ -26,6 +26,10 @@ def generate_launch_description():
     global_path_topic = LaunchConfiguration("global_path_topic")
     local_target_distance = LaunchConfiguration("local_target_distance")
     grid_visualization_rate_hz = LaunchConfiguration("grid_visualization_rate_hz")
+    runtime_log_enabled = LaunchConfiguration("runtime_log_enabled")
+    runtime_log_report_interval_sec = LaunchConfiguration("runtime_log_report_interval_sec")
+    runtime_log_map_target_rate_hz = LaunchConfiguration("runtime_log_map_target_rate_hz")
+    runtime_log_csv_path = LaunchConfiguration("runtime_log_csv_path")
     cmd_vel_topic = LaunchConfiguration("cmd_vel_topic")
     waypoints_file = LaunchConfiguration("waypoints_file")
 
@@ -90,6 +94,22 @@ def generate_launch_description():
             "grid_visualization_rate_hz",
             default_value="5.0",
             description="SCAN occupancy visualization rate; 0 disables it on headless platforms",
+        ),
+        DeclareLaunchArgument(
+            "runtime_log_enabled",
+            default_value="true",
+            description="Log local-map timing, bottlenecks, CPU, and memory usage",
+        ),
+        DeclareLaunchArgument("runtime_log_report_interval_sec", default_value="5.0"),
+        DeclareLaunchArgument(
+            "runtime_log_map_target_rate_hz",
+            default_value="10.0",
+            description="Required unique local obstacle-map fusion rate",
+        ),
+        DeclareLaunchArgument(
+            "runtime_log_csv_path",
+            default_value="",
+            description="Optional append-only runtime metrics CSV path",
         ),
         DeclareLaunchArgument("cmd_vel_topic", default_value="/cmd_vel"),
         DeclareLaunchArgument(
@@ -257,6 +277,10 @@ def generate_launch_description():
                 "global_path_topic": global_path_topic,
                 "local_target_distance": local_target_distance,
                 "grid_visualization_rate_hz": grid_visualization_rate_hz,
+                "runtime_log_enabled": runtime_log_enabled,
+                "runtime_log_report_interval_sec": runtime_log_report_interval_sec,
+                "runtime_log_map_target_rate_hz": runtime_log_map_target_rate_hz,
+                "runtime_log_csv_path": runtime_log_csv_path,
                 "reference_path_topic": "/scan_planner/manual_reference_path",
                 "publish_marker_reference_path": "false",
                 "use_sim_time": use_sim_time,

@@ -4,9 +4,13 @@
 #include <Eigen/Eigen>
 #include <Eigen/StdVector>
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <condition_variable>
+#include <cstdint>
 #include <cv_bridge/cv_bridge.h>
 #include <cmath>
+#include <fstream>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <iostream>
 #include <mutex>
@@ -18,6 +22,8 @@
 #include <rmw/qos_profiles.h>
 #include <tuple>
 #include <thread>
+#include <string>
+#include <vector>
 #include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/image_encodings.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
@@ -219,6 +225,8 @@ private:
   void visCallback();
   void queueVisualizationSnapshot();
   void visualizationWorkerLoop();
+  void runtimeDiagnosticsCallback();
+  void initializeRuntimeDiagnostics();
 
   // main update process
   void projectDepthImage();
@@ -270,6 +278,7 @@ private:
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr depth_cloud_pub_;
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr extrinsic_pose_pub_;
   rclcpp::TimerBase::SharedPtr occ_timer_, vis_timer_;
+  rclcpp::TimerBase::SharedPtr runtime_diagnostics_timer_;
   rclcpp::Time last_cloud_stamp_{0, 0, RCL_ROS_TIME};
 
   struct VisualizationSnapshot {
@@ -294,6 +303,73 @@ private:
   std::optional<VisualizationSnapshot> pending_visualization_;
   std::thread visualization_worker_;
   bool stop_visualization_worker_{false};
+
+  struct RuntimeMetrics {
+    uint64_t input_frames{0};
+    uint64_t unique_input_frames{0};
+    uint64_t duplicate_input_frames{0};
+    uint64_t no_pose_frames{0};
+    uint64_t empty_input_frames{0};
+    uint64_t prepared_frames{0};
+    uint64_t coalesced_frames{0};
+    uint64_t fusion_frames{0};
+    uint64_t input_points{0};
+    uint64_t prepared_points{0};
+    double decode_ms_sum{0.0};
+    double decode_ms_max{0.0};
+    double filter_ms_sum{0.0};
+    double filter_ms_max{0.0};
+    double sliding_ms_sum{0.0};
+    double sliding_ms_max{0.0};
+    double projection_ms_sum{0.0};
+    double projection_ms_max{0.0};
+    double raycast_ms_sum{0.0};
+    double raycast_ms_max{0.0};
+    double fusion_ms_sum{0.0};
+    double fusion_ms_max{0.0};
+    double queue_wait_ms_sum{0.0};
+    double queue_wait_ms_max{0.0};
+  };
+
+  struct SystemSample {
+    bool valid{false};
+    double system_cpu_percent{0.0};
+    double process_cpu_percent{0.0};
+    double memory_percent{0.0};
+    double process_rss_mb{0.0};
+    double load_1m{0.0};
+    double cpu_pressure_percent{0.0};
+    double memory_pressure_percent{0.0};
+  };
+
+  RuntimeMetrics runtime_metrics_;
+  std::atomic<uint64_t> visualization_requested_{0};
+  std::atomic<uint64_t> visualization_dropped_{0};
+  std::atomic<uint64_t> visualization_published_{0};
+  std::atomic<uint64_t> visualization_points_{0};
+  std::atomic<uint64_t> visualization_work_us_{0};
+  std::atomic<uint64_t> visualization_work_max_us_{0};
+  std::chrono::steady_clock::time_point runtime_window_start_;
+  std::chrono::steady_clock::time_point pending_map_ready_time_;
+  bool pending_map_ready_time_valid_{false};
+  bool runtime_log_enabled_{true};
+  double runtime_report_interval_sec_{5.0};
+  double runtime_map_target_rate_hz_{10.0};
+  double runtime_rate_tolerance_{0.9};
+  double runtime_cpu_warn_percent_{85.0};
+  double runtime_memory_warn_percent_{90.0};
+  double runtime_visualization_target_rate_hz_{0.0};
+  std::string runtime_csv_path_;
+  std::ofstream runtime_csv_stream_;
+  uint64_t previous_system_total_ticks_{0};
+  uint64_t previous_system_idle_ticks_{0};
+  uint64_t previous_process_ticks_{0};
+  uint64_t previous_cpu_pressure_us_{0};
+  uint64_t previous_memory_pressure_us_{0};
+  std::chrono::steady_clock::time_point previous_resource_sample_time_;
+  bool have_previous_resource_sample_{false};
+
+  SystemSample sampleSystemResources();
 
   //
   uniform_real_distribution<double> rand_noise_;

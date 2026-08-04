@@ -109,6 +109,16 @@ def _setup(context):
         "grid_map.visualization_rate_hz": float(
             LaunchConfiguration("grid_visualization_rate_hz").perform(context)
         ),
+        "runtime_log.enabled": _as_bool(
+            LaunchConfiguration("runtime_log_enabled").perform(context)
+        ),
+        "runtime_log.report_interval_sec": float(
+            LaunchConfiguration("runtime_log_report_interval_sec").perform(context)
+        ),
+        "runtime_log.map_target_rate_hz": float(
+            LaunchConfiguration("runtime_log_map_target_rate_hz").perform(context)
+        ),
+        "runtime_log.csv_path": LaunchConfiguration("runtime_log_csv_path").perform(context),
     }
     actions = [
         Node(
@@ -271,6 +281,26 @@ def generate_launch_description():
                 "grid_visualization_rate_hz",
                 default_value="5.0",
                 description="Occupancy visualization rate; 0 disables visualization work",
+            ),
+            DeclareLaunchArgument(
+                "runtime_log_enabled",
+                default_value="true",
+                description="Log map timing, bottleneck attribution, and system resource usage",
+            ),
+            DeclareLaunchArgument(
+                "runtime_log_report_interval_sec",
+                default_value="5.0",
+                description="Runtime diagnostic aggregation window in seconds",
+            ),
+            DeclareLaunchArgument(
+                "runtime_log_map_target_rate_hz",
+                default_value="10.0",
+                description="Target rate of unique local obstacle-map fusion frames",
+            ),
+            DeclareLaunchArgument(
+                "runtime_log_csv_path",
+                default_value="",
+                description="Optional append-only runtime metrics CSV path",
             ),
             DeclareLaunchArgument("reference_path_topic", default_value="/initial_path"),
             DeclareLaunchArgument("publish_marker_reference_path", default_value="true"),
