@@ -1,0 +1,4 @@
+general:
+  description: "main config file" # 程序现在全部先从这里读取路径，再加载其他 yaml 文件
+
+lio_yaml: "mid360.yaml"

@@ -3,11 +3,12 @@ from launch.actions import (
     DeclareLaunchArgument,
     GroupAction,
     IncludeLaunchDescription,
+    LogInfo,
     OpaqueFunction,
 )
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
@@ -17,6 +18,8 @@ LIVOX_LAUNCH_FILES = {
     "mid360": "msg_MID360_launch.py",
     "mid360s": "msg_MID360s_launch.py",
 }
+
+LIO_BACKENDS = ("fastlio2", "yifanlio")
 
 
 def _include_livox_driver(context):
@@ -46,6 +49,7 @@ def _include_livox_driver(context):
 
 def generate_launch_description():
     use_sim_time = LaunchConfiguration("use_sim_time")
+    lio_backend = LaunchConfiguration("lio_backend")
     start_fastlio = LaunchConfiguration("start_fastlio")
     start_fastlio_rviz = LaunchConfiguration("start_fastlio_rviz")
     start_rviz = LaunchConfiguration("rviz")
@@ -58,6 +62,9 @@ def generate_launch_description():
     fastlio_imu_topic = LaunchConfiguration("fastlio_imu_topic")
     fastlio_lidar_type = LaunchConfiguration("fastlio_lidar_type")
     fastlio_localization_mode = LaunchConfiguration("fastlio_localization_mode")
+    yifanlio_config_path = LaunchConfiguration("yifanlio_config_path")
+    yifanlio_publish_tf = LaunchConfiguration("yifanlio_publish_tf")
+    yifanlio_adapter_config = LaunchConfiguration("yifanlio_adapter_config")
     rviz_config = LaunchConfiguration("rviz_config")
     map_frame = LaunchConfiguration("map_frame")
     odom_frame = LaunchConfiguration("odom_frame")
@@ -79,6 +86,11 @@ def generate_launch_description():
         "rviz",
         "fast_anchor.rviz",
     ])
+    default_yifanlio_adapter_config = PathJoinSubstitution([
+        FindPackageShare("yifan_lio_adapter"),
+        "config",
+        "yifan_lio_adapter.yaml",
+    ])
 
     fastlio_launch = PathJoinSubstitution([
         FindPackageShare("fast_lio"),
@@ -86,8 +98,19 @@ def generate_launch_description():
         "mapping.launch.py",
     ])
 
+    fastlio_enabled = PythonExpression([
+        "'", lio_backend, "' == 'fastlio2' and '", start_fastlio, "' == 'true'",
+    ])
+    yifanlio_enabled = PythonExpression(["'", lio_backend, "' == 'yifanlio'"])
+
     return LaunchDescription([
         DeclareLaunchArgument("use_sim_time", default_value="false"),
+        DeclareLaunchArgument(
+            "lio_backend",
+            default_value="fastlio2",
+            choices=list(LIO_BACKENDS),
+            description="Select LIO frontend: fastlio2 (default) or yifanlio",
+        ),
         DeclareLaunchArgument("map_frame", default_value="map"),
         DeclareLaunchArgument("odom_frame", default_value="camera_init"),
         DeclareLaunchArgument("base_frame", default_value="base_link"),
@@ -135,6 +158,22 @@ def generate_launch_description():
         # quickly drifts under pure IMU integration. Keep normal scan matching
         # enabled; map publication and PCD saving remain disabled by YAML.
         DeclareLaunchArgument("fastlio_localization_mode", default_value="false"),
+        DeclareLaunchArgument(
+            "yifanlio_config_path",
+            default_value="root_localization.yaml",
+            description="yifanLIO root config (relative to lio/yaml)",
+        ),
+        DeclareLaunchArgument(
+            "yifanlio_publish_tf",
+            default_value="false",
+            description="Disable yifanLIO's own TF; the adapter/FastAnchor provide the TF tree",
+        ),
+        DeclareLaunchArgument(
+            "yifanlio_adapter_config",
+            default_value=default_yifanlio_adapter_config,
+            description="yifan_lio_adapter parameter YAML",
+        ),
+        LogInfo(msg=["[FastAnchor] LIO backend: ", lio_backend]),
         GroupAction(
             scoped=True,
             actions=[
@@ -146,7 +185,7 @@ def generate_launch_description():
             actions=[
                 IncludeLaunchDescription(
                     PythonLaunchDescriptionSource(fastlio_launch),
-                    condition=IfCondition(start_fastlio),
+                    condition=IfCondition(fastlio_enabled),
                     launch_arguments={
                         "use_sim_time": use_sim_time,
                         "config_path": PathJoinSubstitution([FindPackageShare("fast_lio"), "config"]),
@@ -158,6 +197,31 @@ def generate_launch_description():
                         "localization_mode": fastlio_localization_mode,
                     }.items(),
                 ),
+            ],
+        ),
+        Node(
+            package="lio",
+            executable="lio",
+            name="lio_node",
+            output="screen",
+            condition=IfCondition(yifanlio_enabled),
+            parameters=[
+                {
+                    "config_path": yifanlio_config_path,
+                    "use_sim_time": use_sim_time,
+                    "publish_tf": yifanlio_publish_tf,
+                }
+            ],
+        ),
+        Node(
+            package="yifan_lio_adapter",
+            executable="yifan_lio_adapter_node",
+            name="yifan_lio_adapter_node",
+            output="screen",
+            condition=IfCondition(yifanlio_enabled),
+            parameters=[
+                yifanlio_adapter_config,
+                {"use_sim_time": use_sim_time},
             ],
         ),
         Node(

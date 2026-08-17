@@ -1,0 +1,4 @@
+general:
+  description: "main config file for FastAnchor localization (lio_backend:=yifanlio)"
+
+lio_yaml: "mid360_localization.yaml"

@@ -1,0 +1,17 @@
+yifan_lio_adapter_node:
+  ros__parameters:
+    # yifanLIO root config file, resolved against the lio package yaml directory
+    # (or lio_yaml_dir if provided). The adapter reads the SAME file as the LIO
+    # node so the extrinsic and topic names have a single source of truth.
+    lio_root_config: "root_localization.yaml"
+
+    # FAST-LIO-compatible unified interface consumed by FastAnchor ICP.
+    output_odom_topic: "/Odometry"
+    output_cloud_topic: "/cloud_registered_body"
+
+    # Frame normalization to FAST-LIO semantics.
+    world_frame: "camera_init"
+    body_frame: "body"
+
+    # Mirror FAST-LIO's camera_init -> body TF.
+    publish_tf: true

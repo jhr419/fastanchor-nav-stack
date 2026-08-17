@@ -1,0 +1,73 @@
+general:
+  description: "LIO config file"
+  version: 1
+
+lidar_type: 3 # Livox = 1, Ouster = 2, Velodyne = 3
+
+offset:
+  imu_t_lidar: [ -0.011 , -0.02329, 0.04412] # IMU系下激光雷达的位置
+  imu_R_lidar:
+    - [1.0, 0.0, 0.0]
+    - [0.0, 1.0, 0.0]
+    - [0.0, 0.0, 1.0]
+  lidar_t_vehicle: [ 0.27255 , -0.00053, 0.17954] # Lidar系下小车中心的位置
+  lidar_R_vehicle: # Lidar系下小车的旋转
+    - [1.0, 0.0, 0.0]
+    - [0.0, 1.0, 0.0]
+    - [0.0, 0.0, 1.0]
+
+downsample:
+  point_filter_num: 2 # 订阅点云时的降采样比例 [ 确保为正整数 ]
+  blind: 2 # 订阅点云时忽略距离小于 blind 的点 [ 单位：m ]
+  filter_size: 0.5
+
+relocation:
+  relocation_enable: false # 是否开启重定位
+  pcd_load_name: "scans.pcd" # 重定位时加载的 .pcd 文件名称，相对 PCD 文件夹
+
+pcd_save:
+  global_map_save_enable: true # 是否保存全局点云 [ 只在未开启重定位时有效 ]
+  every_n_frame_save: -1 # 保存单帧点云（world系），每 n 帧保存一次， -1 表示不单独保存每帧pcd地图
+  timestamp_prefix: true # 是否在名称前加上时间戳
+  pcd_save_name: "scans.pcd" # 保存点云的名称，相对 PCD 文件夹
+
+pub:
+  global_map_pub_enable: false # 是否发布全局地图 [ 耗时较长，可视化需要，实际使用中不建议开启 ] [ 只在未开启重定位且保存全局点云时有效 ]
+  ikdtree_pub_enable: false # 是否发布 ikdtree 中的点云 [ 耗时较长，可视化需要，实际使用中不建议开启 ]
+
+
+topic_sub:
+  lidar_topic_name: "/velodyne_points"
+  imu_topic_name: "/handsfree/imu"
+  wheel_topic_name: "/wheel_info" # 注意，轮速计话题的回调函数 receive_wheel 需要根据实际修改
+  image_topic_name: "/camera/color/image_raw"
+
+
+topic_pub:
+  clouds_lidar_topic_name: "/LIO/clouds_lidar"  # lidar系当前帧点云发布的话题名
+  global_map_topic_name: "/LIO/global_map"  # 全局地图发布的话题名
+  ikdtree_topic_name: "/LIO/ikdtree"  # ikdtree 发布的话题名
+  odom_imu_topic_name: "/LIO/odom_imu"  # imu位姿发布的话题名
+  odom_vehicle_topic_name: "/LIO/odom_vehicle"  # body位姿发布的话题名 如果 body_T_lidar 为单位阵，则相当于 odom_lidar
+
+camera:
+  camera_enable: true
+  color_enable: true   # 【当camera_enable为false，color_enable为true时，仅上色图像】
+  camera_t_lidar: [0.033443, -0.061178, -0.074646]
+  camera_R_lidar:
+    - [0.999892 ,-0.012027 , 0.008447]
+    - [0.008757 , 0.025948 ,-0.999625]
+    - [0.011803 , 0.999591 , 0.026050]
+
+
+
+wheel:
+  wheel_enable: false # 是否启用轮速计更新
+
+log:
+  log_save_enable: true # 全局设置，是否保存日志【若设为 false 则下面的设置无效】
+  wheel_data_log_enable: false # 轮速计输出记录
+  trajectory_log_enable: true # 位姿输出记录
+  time_log_enable: false # 程序耗时记录
+  pub_time_log_enable: false # 发布耗时记录
+  res_wheel_log_enable: false # 轮速计残差记录
