@@ -31,7 +31,7 @@ find_package(visualization_msgs REQUIRED)
 
 set(scan_planner_dependencies
   ament_index_cpp bspline_opt geometry_msgs nav_msgs path_searching plan_env
-  rclcpp scan_planner_msgs sensor_msgs std_msgs tf2 tf2_geometry_msgs tf2_ros
+  rclcpp scan_planner_msgs sensor_msgs std_msgs std_srvs tf2 tf2_geometry_msgs tf2_ros
   traj_utils visualization_msgs)
 
 add_executable(scan_planner_node

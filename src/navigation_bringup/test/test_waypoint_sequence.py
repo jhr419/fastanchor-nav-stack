@@ -94,3 +94,30 @@ def test_each_waypoint_requires_a_separate_global_path_confirmation():
     assert sequence.confirm_current_waypoint()
     second_event = sequence.observe((2.0, 0.0, 0.3), 2.1)
     assert second_event is not None and second_event.completed
+
+
+def test_reset_current_confirmation_requires_fresh_path():
+    sequence = WaypointSequence(
+        waypoints=((1.0, 0.0, 0.0),),
+        xy_tolerance=0.5,
+        z_tolerance=-1.0,
+        hold_time=0.0,
+        loop=False,
+    )
+
+    assert sequence.confirm_current_waypoint()
+    assert sequence.current_confirmed
+
+    assert sequence.reset_current_confirmation()
+    assert not sequence.current_confirmed
+
+    # Being physically inside the tolerance is not enough after resume.
+    # A fresh global path must confirm the waypoint again.
+    event = sequence.observe((1.0, 0.0, 0.0), 1.0)
+    assert event is None
+
+    assert sequence.confirm_current_waypoint()
+
+    event = sequence.observe((1.0, 0.0, 0.0), 2.0)
+    assert event is not None
+    assert event.completed

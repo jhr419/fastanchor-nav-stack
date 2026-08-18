@@ -9,6 +9,7 @@
 #include <nav_msgs/msg/path.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/bool.hpp>
+#include <std_srvs/srv/set_bool.hpp>
 #include <vector>
 #include <visualization_msgs/msg/marker.hpp>
 
@@ -68,6 +69,7 @@ namespace scan_planner
     bool preset_started_{false};
     bool rviz_height_ready_;
     bool go2_execution_frozen_;
+    bool navigation_enabled_{true};
     bool enable_fail_safe_, need_hover_stop_;
     FSM_EXEC_STATE exec_state_;
     int continuously_called_times_{0};
@@ -93,6 +95,7 @@ namespace scan_planner
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
     rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr path_sub_;
     rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr go2_execution_frozen_sub_;
+    rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr navigation_enable_service_;
     rclcpp::Publisher<scan_planner_msgs::msg::Bspline>::SharedPtr bspline_pub_;
     rclcpp::Publisher<scan_planner_msgs::msg::DataDisp>::SharedPtr data_disp_pub_;
     rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr self_inflation_pub_;
@@ -128,6 +131,10 @@ namespace scan_planner
     void pathCallback(const nav_msgs::msg::Path::ConstSharedPtr &msg);
     void odometryCallback(const nav_msgs::msg::Odometry::ConstSharedPtr &msg);
     void go2ExecutionFrozenCallback(const std_msgs::msg::Bool::ConstSharedPtr &msg);
+
+    void navigationEnableCallback(
+        const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
+        std::shared_ptr<std_srvs::srv::SetBool::Response> response);
 
     bool checkCollision();
 

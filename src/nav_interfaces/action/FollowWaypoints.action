@@ -1,0 +1,16 @@
+# Goal
+string mission_id
+string frame_id
+geometry_msgs/Point[] waypoints
+
+---
+# Result
+bool success
+string message
+
+---
+# Feedback
+uint32 current_index
+uint32 total_waypoints
+float32 progress
+string state

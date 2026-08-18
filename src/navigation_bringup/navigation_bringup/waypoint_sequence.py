@@ -82,6 +82,16 @@ class WaypointSequence:
         self._current_confirmed = True
         return True
 
+
+    def reset_current_confirmation(self) -> bool:
+        """Require a fresh global path for the current waypoint."""
+        if self.completed:
+            return False
+
+        self._current_confirmed = False
+        self._arrival_started_at = None
+        return True
+
     def observe(
         self, position: Waypoint, timestamp_seconds: float
     ) -> Optional[ProgressEvent]:

@@ -27,6 +27,7 @@ namespace scan_planner
     have_new_target_ = false;
     rviz_height_ready_ = false;
     go2_execution_frozen_ = false;
+    navigation_enabled_ = true;
     flag_escape_emergency_ = true;
     need_hover_stop_ = false;
     replan_fail_count_ = 0;
@@ -78,6 +79,14 @@ namespace scan_planner
         "planning/go2_execution_frozen", 10,
         std::bind(&SCANReplanFSM::go2ExecutionFrozenCallback, this, std::placeholders::_1));
 
+    navigation_enable_service_ = node_->create_service<std_srvs::srv::SetBool>(
+        "/scan_planner/set_navigation_enabled",
+        std::bind(
+            &SCANReplanFSM::navigationEnableCallback,
+            this,
+            std::placeholders::_1,
+            std::placeholders::_2));
+
     bspline_pub_ = node_->create_publisher<scan_planner_msgs::msg::Bspline>("planning/bspline", 10);
     data_disp_pub_ = node_->create_publisher<scan_planner_msgs::msg::DataDisp>("planning/data_display", 100);
     self_inflation_pub_ = node_->create_publisher<visualization_msgs::msg::Marker>(
@@ -122,6 +131,14 @@ namespace scan_planner
 
   void SCANReplanFSM::rvizGoalCallback(const geometry_msgs::msg::PoseStamped::ConstSharedPtr &msg)
   {
+    if (!navigation_enabled_)
+    {
+      RCLCPP_WARN_THROTTLE(
+          node_->get_logger(), *node_->get_clock(), 2000,
+          "Navigation execution disabled; ignoring goal");
+      return;
+    }
+
     if (!msg)
       return;
 
@@ -336,8 +353,104 @@ namespace scan_planner
     return false;
   }
 
+  void SCANReplanFSM::navigationEnableCallback(
+      const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
+      std::shared_ptr<std_srvs::srv::SetBool::Response> response)
+  {
+    if (!request || !response)
+      return;
+
+    if (request->data == navigation_enabled_)
+    {
+      response->success = true;
+      response->message = navigation_enabled_
+                              ? "Navigation execution is already enabled"
+                              : "Navigation execution is already disabled";
+      return;
+    }
+
+    if (!request->data)
+    {
+      RCLCPP_INFO(node_->get_logger(), "Disabling navigation execution");
+
+      /*
+       * Disable first so that any late-arriving goal/path is ignored.
+       */
+      navigation_enabled_ = false;
+
+      /*
+       * Remove the currently active navigation request.
+       * The mission manager keeps the mission-level waypoint state;
+       * SCAN only discards its local execution state.
+       */
+      trigger_ = false;
+      have_target_ = false;
+      have_new_target_ = false;
+
+      active_waypoints_.clear();
+      current_wp_ = 0;
+
+      replan_fail_count_ = 0;
+      need_hover_stop_ = false;
+      flag_escape_emergency_ = true;
+
+      /*
+       * Publish a stationary B-spline at the current robot position.
+       * This is the actual motion stop; changing the FSM state alone
+       * would not be sufficient because the controller may still hold
+       * the previous trajectory.
+       */
+      if (have_odom_)
+      {
+        callEmergencyStop(odom_pos_);
+
+        if (exec_state_ != INIT)
+          changeFSMExecState(WAIT_TARGET, "MISSION_CTRL");
+      }
+
+      response->success = true;
+      response->message = have_odom_
+                              ? "Navigation execution disabled and robot stop trajectory published"
+                              : "Navigation execution disabled; waiting for odometry";
+
+      RCLCPP_INFO(node_->get_logger(), "%s", response->message.c_str());
+      return;
+    }
+
+    /*
+     * Enabling navigation does NOT resume the previous trajectory.
+     * The upper-level mission manager must publish the current waypoint
+     * again so FastPlanner creates a fresh path from the current pose.
+     */
+    navigation_enabled_ = true;
+
+    trigger_ = false;
+    have_target_ = false;
+    have_new_target_ = false;
+
+    active_waypoints_.clear();
+    current_wp_ = 0;
+
+    if (exec_state_ != INIT)
+      changeFSMExecState(WAIT_TARGET, "MISSION_CTRL");
+
+    response->success = true;
+    response->message =
+        "Navigation execution enabled; waiting for a new goal/path";
+
+    RCLCPP_INFO(node_->get_logger(), "%s", response->message.c_str());
+  }
+
   void SCANReplanFSM::pathCallback(const nav_msgs::msg::Path::ConstSharedPtr &msg)
   {
+    if (!navigation_enabled_)
+    {
+      RCLCPP_WARN_THROTTLE(
+          node_->get_logger(), *node_->get_clock(), 2000,
+          "Navigation execution disabled; ignoring reference path");
+      return;
+    }
+
     if (!msg || msg->poses.empty())
     {
       RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000,
@@ -520,6 +633,9 @@ namespace scan_planner
   void SCANReplanFSM::execFSMCallback()
   {
     updateLocalTrajTimeFreeze();
+
+    if (!navigation_enabled_)
+      return;
 
     static int fsm_num = 0;
     fsm_num++;
@@ -797,6 +913,9 @@ namespace scan_planner
 
   void SCANReplanFSM::checkCollisionCallback()
   {
+    if (!navigation_enabled_)
+      return;
+
     updateLocalTrajTimeFreeze();
 
     LocalTrajData *info = &planner_manager_->local_data_;

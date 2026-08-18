@@ -224,9 +224,7 @@ def generate_launch_description():
             executable="waypoint_mission_manager",
             name="waypoint_mission_manager",
             output="screen",
-            condition=IfCondition(PythonExpression(["'", waypoints_file, "' != ''"])),
             parameters=[
-                waypoints_file,
                 {
                     "use_sim_time": ParameterValue(use_sim_time, value_type=bool),
                     "frame_id": map_frame,

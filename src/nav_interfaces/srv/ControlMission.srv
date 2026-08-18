@@ -1,0 +1,10 @@
+uint8 PAUSE=1
+uint8 RESUME=2
+
+string mission_id
+uint8 command
+
+---
+bool success
+string message
+string state
