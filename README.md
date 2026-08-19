@@ -219,5 +219,17 @@ ros2 launch navigation_bringup navigation_system.launch.py \
 同一命令的一行形式：
 
 ```bash
-ros2 launch navigation_bringup navigation_system.launch.py   map_pcd_path:=$PWD/maps/map_preprocessed2.pcd   local_target_distance:=3.0 lidar_model:=mid360
+ros2 launch navigation_bringup navigation_system.launch.py   map_pcd_path:=$PWD/maps/map_preprocessed2.pcd   local_target_distance:=3.0 lidar_model:=mid360 lio_backend:=yifanlio
 ```
+
+
+ros2 launch navigation_bringup navigation_system.launch.py \
+  map_pcd_path:=$PWD/maps/map_preprocessed2.pcd \
+  runtime_log_map_target_rate_hz:=10.0 \
+  runtime_log_report_interval_sec:=5.0 \
+  runtime_log_csv_path:=/tmp/navigation-runtime.csv
+
+停止导航
+  ros2 service call /scan_planner/set_navigation_enabled std_srvs/srv/SetBool "{data: false}"
+启动导航
+  ros2 service call /scan_planner/set_navigation_enabled std_srvs/srv/SetBool "{data: true}"

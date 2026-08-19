@@ -1,0 +1,350 @@
+"""Main ROS 2 launch entry point for simulation and real-robot remapping."""
+
+import os
+
+from ament_index_python.packages import get_package_share_directory
+from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction
+from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.substitutions import Command, LaunchConfiguration
+from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
+
+
+def _as_bool(value):
+    return value.lower() in ("1", "true", "yes", "on")
+
+
+def _setup(context):
+    scan_share = get_package_share_directory("scan_planner")
+    go2_share = get_package_share_directory("go2_description")
+    planner_yaml = os.path.join(scan_share, "config", "planner.yaml")
+    controllers_yaml = os.path.join(scan_share, "config", "controllers.yaml")
+    is_real = _as_bool(LaunchConfiguration("is_real_world").perform(context))
+    use_sim_time = _as_bool(LaunchConfiguration("use_sim_time").perform(context))
+    sensor_type = LaunchConfiguration("sensor_type").perform(context)
+    controller_mode = LaunchConfiguration("controller_mode").perform(context)
+    localization_source = LaunchConfiguration("localization_source").perform(context)
+    keypoints_file = LaunchConfiguration("keypoints_file").perform(context)
+    navi_mode = int(LaunchConfiguration("navi_mode").perform(context))
+    if sensor_type not in ("lidar", "depth"):
+        raise RuntimeError("sensor_type must be 'lidar' or 'depth'")
+    if controller_mode not in ("open_loop", "closed_loop"):
+        raise RuntimeError("controller_mode must be 'open_loop' or 'closed_loop'")
+    if localization_source not in ("fast_anchor", "legacy_lio"):
+        raise RuntimeError("localization_source must be 'fast_anchor' or 'legacy_lio'")
+    if is_real and localization_source == "fast_anchor" and sensor_type != "lidar":
+        raise RuntimeError("FastAnchor integration currently requires sensor_type='lidar'")
+    if navi_mode not in (1, 2, 3):
+        raise RuntimeError("navi_mode must be 1, 2, or 3")
+    if navi_mode == 2 and (not keypoints_file or not os.path.isfile(keypoints_file)):
+        raise RuntimeError(
+            "navi_mode=2 requires keypoints_file to reference a ROS 2 parameter YAML"
+        )
+
+    if is_real:
+        if localization_source == "fast_anchor":
+            # FastAnchor publishes the corrected base_link pose in map and an
+            # ICP-aligned point cloud in the same map frame. Using the aligned
+            # cloud avoids duplicating FastAnchor's map->odom and body->base
+            # transforms inside the planner.
+            body_pose = "/fast_anchor/odom"
+            sensor_pose = "/fast_anchor/odom"
+            cloud = "/fast_anchor/aligned_cloud"
+            cloud_is_world = True
+            need_extrinsic = False
+            planning_frame = "map"
+        else:
+            body_pose = "/LIO/odom_vehicle"
+            sensor_pose = "/LIO/odom_imu"
+            cloud = "/LIO/clouds_lidar"
+            cloud_is_world = False
+            need_extrinsic = True
+            planning_frame = "world"
+        depth = "/camera/aligned_depth_to_color/image_raw"
+        intrinsics = {
+            "grid_map.cx": 317.19183349609375,
+            "grid_map.cy": 256.4806823730469,
+            "grid_map.fx": 609.5884399414062,
+            "grid_map.fy": 609.22021484375,
+        }
+    else:
+        body_pose = "/quad_0/body_pose"
+        sensor_pose = "/quad_0/camera_pose" if sensor_type == "depth" else "/quad_0/lidar_pose"
+        cloud = "/quad_0/cloud"
+        depth = "/quad_0/depth"
+        cloud_is_world = True
+        need_extrinsic = False
+        planning_frame = "world"
+        intrinsics = {}
+
+    # Explicit topic arguments take precedence over localization presets.
+    body_pose = LaunchConfiguration("body_pose_topic").perform(context) or body_pose
+    sensor_pose = LaunchConfiguration("sensor_pose_topic").perform(context) or sensor_pose
+    cloud = LaunchConfiguration("cloud_topic").perform(context) or cloud
+    depth = LaunchConfiguration("depth_topic").perform(context) or depth
+    cmd_vel = LaunchConfiguration("cmd_vel_topic").perform(context)
+    initial_pose_topic = LaunchConfiguration("initial_pose_topic").perform(context)
+    goal_topic = LaunchConfiguration("goal_topic").perform(context)
+    global_path_topic = LaunchConfiguration("global_path_topic").perform(context)
+    scan_initial_path_topic = LaunchConfiguration("scan_initial_path_topic", default="/scan_planner/initial_path")
+    path_cropper_robot_frame = LaunchConfiguration("path_cropper_robot_frame", default="base_link")
+    path_cropper_update_rate = LaunchConfiguration("path_cropper_update_rate", default="20.0")
+    path_window_robot_aligned = LaunchConfiguration("path_window_robot_aligned", default="false")
+    reference_path_topic = LaunchConfiguration("reference_path_topic").perform(context)
+    local_target_distance = float(
+        LaunchConfiguration("local_target_distance").perform(context)
+    )
+    if local_target_distance <= 0.0:
+        raise RuntimeError("local_target_distance must be greater than zero")
+    publish_marker_reference_path = _as_bool(
+        LaunchConfiguration("publish_marker_reference_path").perform(context)
+    )
+
+    common = {"use_sim_time": use_sim_time}
+    planner_overrides = {
+        **common,
+        **intrinsics,
+        "fsm.navi_mode": navi_mode,
+        "fsm.planning_horizon": local_target_distance,
+        "grid_map.sensor_type": sensor_type,
+        "grid_map.cloud_is_world": cloud_is_world,
+        "grid_map.need_extrinsic": need_extrinsic,
+        "grid_map.frame_id": planning_frame,
+        "grid_map.visualization_rate_hz": float(
+            LaunchConfiguration("grid_visualization_rate_hz").perform(context)
+        ),
+        "runtime_log.enabled": _as_bool(
+            LaunchConfiguration("runtime_log_enabled").perform(context)
+        ),
+        "runtime_log.report_interval_sec": float(
+            LaunchConfiguration("runtime_log_report_interval_sec").perform(context)
+        ),
+        "runtime_log.map_target_rate_hz": float(
+            LaunchConfiguration("runtime_log_map_target_rate_hz").perform(context)
+        ),
+        "runtime_log.csv_path": LaunchConfiguration("runtime_log_csv_path").perform(context),
+    }
+    actions = [
+
+        Node(
+            package="scan_planner",
+            executable="global_path_window_node",
+            name="global_path_window_node",
+            output="screen",
+            parameters=[
+                {
+                    "global_path_topic": global_path_topic,
+                    "local_path_topic": scan_initial_path_topic,
+                    "robot_frame": path_cropper_robot_frame,
+                    "update_rate": ParameterValue(
+                        path_cropper_update_rate,
+                        value_type=float,
+                    ),
+                    "robot_aligned_window": ParameterValue(
+                        path_window_robot_aligned,
+                        value_type=bool,
+                    ),
+                }
+            ],
+        ),
+
+        Node(
+            package="scan_planner",
+            executable="scan_planner_node",
+            name="scan_planner_node",
+            output="screen",
+            parameters=[planner_yaml] + ([keypoints_file] if keypoints_file else []) + [planner_overrides],
+            remappings=[
+                ("body_pose", body_pose),
+                ("sensor_pose", sensor_pose),
+                ("cloud", cloud),
+                ("depth", depth),
+                ("move_base_simple/goal", goal_topic),
+                ("initial_path", scan_initial_path_topic),
+            ],
+        )
+    ]
+    actions.append(
+        Node(
+            package="scan_planner",
+            executable="pose_marker_server",
+            name="pose_marker_server",
+            output="screen",
+            parameters=[
+                common,
+                {
+                    "frame_id": planning_frame,
+                    "initial_pose_topic": initial_pose_topic,
+                    "goal_pose_topic": goal_topic,
+                    "reference_path_topic": reference_path_topic,
+                    "publish_reference_path": publish_marker_reference_path,
+                },
+            ],
+        )
+    )
+    actions.append(
+        Node(
+            package="robot_state_publisher",
+            executable="robot_state_publisher",
+            name="go2_robot_state_publisher",
+            output="screen",
+            parameters=[
+                common,
+                {
+                    "robot_description": Command(
+                        ["xacro ", os.path.join(go2_share, "xacro", "robot.xacro"),
+                         " use_gazebo:=false"]
+                    )
+                },
+            ],
+        )
+    )
+
+    if controller_mode == "open_loop":
+        actions.append(
+            Node(
+                package="scan_planner",
+                executable="open_loop_controller",
+                name="open_loop_controller",
+                output="screen",
+                parameters=[controllers_yaml, common],
+                remappings=[
+                    ("planning/bspline", "/planning/bspline"),
+                    ("body_pose", body_pose),
+                ],
+            )
+        )
+    else:
+        actions.append(
+            Node(
+                package="scan_planner",
+                executable="closed_loop_controller",
+                name="closed_loop_controller",
+                output="screen",
+                parameters=[controllers_yaml, common],
+                remappings=[
+                    ("body_pose", body_pose),
+                    ("cmd_vel", cmd_vel or ("/cmd_vel" if is_real else "/quad_0/cmd_vel")),
+                ],
+            )
+        )
+        if not is_real:
+            actions.append(
+                Node(
+                    package="scan_planner",
+                    executable="go2_kinematic_sim",
+                    name="go2_kinematic_sim",
+                    output="screen",
+                    parameters=[
+                        controllers_yaml,
+                        common,
+                        {
+                            "init_x": float(LaunchConfiguration("init_x").perform(context)),
+                            "init_y": float(LaunchConfiguration("init_y").perform(context)),
+                            "init_z": float(LaunchConfiguration("init_z").perform(context)),
+                            "publish_tf": False,
+                        },
+                    ],
+                    remappings=[
+                        ("body_pose", "/quad_0/body_pose"),
+                        ("cmd_vel", "/quad_0/cmd_vel"),
+                    ],
+                )
+            )
+
+    if not is_real:
+        actions.extend(
+            [
+                Node(
+                    package="scan_planner",
+                    executable="go2_gait_publisher",
+                    name="go2_gait_publisher",
+                    output="screen",
+                    parameters=[controllers_yaml, common],
+                    remappings=[("body_pose", body_pose)],
+                ),
+                IncludeLaunchDescription(
+                    PythonLaunchDescriptionSource(
+                        os.path.join(scan_share, "launch", "simulator.launch.py")
+                    ),
+                    launch_arguments={
+                        name: LaunchConfiguration(name)
+                        for name in (
+                            "is_real_world",
+                            "sensor_type",
+                            "use_gpu",
+                            "use_pcd_map",
+                            "pcd_map_file",
+                            "map_size_x",
+                            "map_size_y",
+                            "map_size_z",
+                            "use_sim_time",
+                        )
+                    }.items(),
+                ),
+            ]
+        )
+    return actions
+
+
+def generate_launch_description():
+    return LaunchDescription(
+        [
+            DeclareLaunchArgument("is_real_world", default_value="false"),
+            DeclareLaunchArgument("navi_mode", default_value="1"),
+            DeclareLaunchArgument("sensor_type", default_value="lidar"),
+            DeclareLaunchArgument("controller_mode", default_value="closed_loop"),
+            DeclareLaunchArgument("localization_source", default_value="fast_anchor"),
+            DeclareLaunchArgument("body_pose_topic", default_value=""),
+            DeclareLaunchArgument("sensor_pose_topic", default_value=""),
+            DeclareLaunchArgument("cloud_topic", default_value=""),
+            DeclareLaunchArgument("depth_topic", default_value=""),
+            DeclareLaunchArgument("cmd_vel_topic", default_value=""),
+            DeclareLaunchArgument("initial_pose_topic", default_value="/initialpose"),
+            DeclareLaunchArgument("goal_topic", default_value="/move_base_simple/goal"),
+            DeclareLaunchArgument("path_cropper_robot_frame", default_value="body"),
+            DeclareLaunchArgument("path_cropper_update_rate", default_value="20.0"),
+            DeclareLaunchArgument("path_window_robot_aligned", default_value="false"),
+            DeclareLaunchArgument("local_target_distance", default_value="4.0"),
+            DeclareLaunchArgument(
+                "grid_visualization_rate_hz",
+                default_value="5.0",
+                description="Occupancy visualization rate; 0 disables visualization work",
+            ),
+            DeclareLaunchArgument(
+                "runtime_log_enabled",
+                default_value="true",
+                description="Log map timing, bottleneck attribution, and system resource usage",
+            ),
+            DeclareLaunchArgument(
+                "runtime_log_report_interval_sec",
+                default_value="5.0",
+                description="Runtime diagnostic aggregation window in seconds",
+            ),
+            DeclareLaunchArgument(
+                "runtime_log_map_target_rate_hz",
+                default_value="10.0",
+                description="Target rate of unique local obstacle-map fusion frames",
+            ),
+            DeclareLaunchArgument(
+                "runtime_log_csv_path",
+                default_value="",
+                description="Optional append-only runtime metrics CSV path",
+            ),
+            DeclareLaunchArgument("reference_path_topic", default_value="/initial_path"),
+            DeclareLaunchArgument("publish_marker_reference_path", default_value="true"),
+            DeclareLaunchArgument("keypoints_file", default_value=""),
+            DeclareLaunchArgument("use_gpu", default_value="false"),
+            DeclareLaunchArgument("use_pcd_map", default_value="false"),
+            DeclareLaunchArgument("pcd_map_file", default_value=""),
+            DeclareLaunchArgument("map_size_x", default_value="40.0"),
+            DeclareLaunchArgument("map_size_y", default_value="40.0"),
+            DeclareLaunchArgument("map_size_z", default_value="5.0"),
+            DeclareLaunchArgument("init_x", default_value="-19.0"),
+            DeclareLaunchArgument("init_y", default_value="1.0"),
+            DeclareLaunchArgument("init_z", default_value="0.3"),
+            DeclareLaunchArgument("use_sim_time", default_value="false"),
+            OpaqueFunction(function=_setup),
+        ]
+    )

@@ -13,5 +13,16 @@ yifan_lio_adapter_node:
     world_frame: "camera_init"
     body_frame: "body"
 
+    # Coordinate rotation from yifanLIO's physical IMU frame into the virtual
+    # body frame used by the working FastLIO2 baseline. This must match
+    # FAST_LIO preprocess.input_rotation_rpy_rad and is applied to BOTH the
+    # cloud coordinates and the odometry child-frame pose.
+    imu_to_common_body_rpy: [-0.034101, 0.566395, 0.0]
+
+    # High-rate IMU prediction odometry remains available on /Odometry. A cloud
+    # is exposed only after its exact-stamp posterior odom has arrived, while
+    # FastAnchor selects that pose from its common timestamp buffer for ICP.
+    max_sync_queue_size: 2000
+
     # Mirror FAST-LIO's camera_init -> body TF.
     publish_tf: true

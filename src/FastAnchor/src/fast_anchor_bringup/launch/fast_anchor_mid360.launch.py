@@ -221,7 +221,12 @@ def generate_launch_description():
             condition=IfCondition(yifanlio_enabled),
             parameters=[
                 yifanlio_adapter_config,
-                {"use_sim_time": use_sim_time},
+                {
+                    "use_sim_time": use_sim_time,
+                    # Keep the adapter's topics/extrinsic bound to the exact
+                    # root config selected for the yifanLIO node.
+                    "lio_root_config": yifanlio_config_path,
+                },
             ],
         ),
         Node(

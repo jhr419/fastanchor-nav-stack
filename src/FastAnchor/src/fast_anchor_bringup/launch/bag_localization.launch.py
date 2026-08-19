@@ -2,6 +2,7 @@ from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,
     ExecuteProcess,
+    GroupAction,
     IncludeLaunchDescription,
     LogInfo,
 )
@@ -29,6 +30,9 @@ def generate_launch_description():
     yifanlio_config_path = LaunchConfiguration("yifanlio_config_path")
     yifanlio_publish_tf = LaunchConfiguration("yifanlio_publish_tf")
     yifanlio_adapter_config = LaunchConfiguration("yifanlio_adapter_config")
+    map_pcd_path = LaunchConfiguration("map_pcd_path")
+    visualization_map_pcd_path = LaunchConfiguration("visualization_map_pcd_path")
+    icp_map_pcd_path = LaunchConfiguration("icp_map_pcd_path")
 
     default_config = PathJoinSubstitution([
         FindPackageShare("fast_anchor_bringup"),
@@ -64,6 +68,11 @@ def generate_launch_description():
             description="Select LIO frontend: fastlio2 (default) or yifanlio",
         ),
         DeclareLaunchArgument("config_file", default_value=default_config),
+        DeclareLaunchArgument("map_pcd_path", default_value="maps/map_preprocessed.pcd"),
+        DeclareLaunchArgument(
+            "visualization_map_pcd_path", default_value="maps/map_visualization.pcd"
+        ),
+        DeclareLaunchArgument("icp_map_pcd_path", default_value="maps/map_preprocessed.pcd"),
         DeclareLaunchArgument("rviz", default_value="true"),
         DeclareLaunchArgument("rviz_config", default_value=default_rviz),
         DeclareLaunchArgument("fastlio_config_file", default_value="mid360_localization.yaml"),
@@ -84,19 +93,28 @@ def generate_launch_description():
             default_value=default_yifanlio_adapter_config,
         ),
         LogInfo(msg=["[FastAnchor] LIO backend: ", lio_backend]),
-        IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(fastlio_launch),
-            condition=IfCondition(fastlio_enabled),
-            launch_arguments={
-                "use_sim_time": use_sim_time,
-                "config_path": PathJoinSubstitution([FindPackageShare("fast_lio"), "config"]),
-                "config_file": fastlio_config_file,
-                "rviz": "false",
-                "lid_topic": fastlio_lidar_topic,
-                "imu_topic": fastlio_imu_topic,
-                "lidar_type": fastlio_lidar_type,
-                "localization_mode": "false",
-            }.items(),
+        # The child launch also declares "config_file". Scope it so that its
+        # FAST-LIO yaml cannot replace FastAnchor's parameter-file argument.
+        GroupAction(
+            scoped=True,
+            actions=[
+                IncludeLaunchDescription(
+                    PythonLaunchDescriptionSource(fastlio_launch),
+                    condition=IfCondition(fastlio_enabled),
+                    launch_arguments={
+                        "use_sim_time": use_sim_time,
+                        "config_path": PathJoinSubstitution(
+                            [FindPackageShare("fast_lio"), "config"]
+                        ),
+                        "config_file": fastlio_config_file,
+                        "rviz": "false",
+                        "lid_topic": fastlio_lidar_topic,
+                        "imu_topic": fastlio_imu_topic,
+                        "lidar_type": fastlio_lidar_type,
+                        "localization_mode": "false",
+                    }.items(),
+                ),
+            ],
         ),
         Node(
             package="lio",
@@ -120,7 +138,10 @@ def generate_launch_description():
             condition=IfCondition(yifanlio_enabled),
             parameters=[
                 yifanlio_adapter_config,
-                {"use_sim_time": use_sim_time},
+                {
+                    "use_sim_time": use_sim_time,
+                    "lio_root_config": yifanlio_config_path,
+                },
             ],
         ),
         Node(
@@ -128,7 +149,18 @@ def generate_launch_description():
             executable="fast_anchor_localization_node",
             name="fast_anchor_localization_node",
             output="screen",
-            parameters=[config_file, {"use_sim_time": use_sim_time}],
+            parameters=[
+                config_file,
+                {
+                    "use_sim_time": use_sim_time,
+                    "map_pcd_path": map_pcd_path,
+                    "visualization_map_pcd_path": visualization_map_pcd_path,
+                    "icp_map_pcd_path": icp_map_pcd_path,
+                    "map.pcd_path": map_pcd_path,
+                    "map.visualization_pcd_path": visualization_map_pcd_path,
+                    "map.icp_pcd_path": icp_map_pcd_path,
+                },
+            ],
         ),
         ExecuteProcess(
             cmd=["ros2", "bag", "play", bag_path, "--clock"],

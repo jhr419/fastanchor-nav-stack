@@ -24,9 +24,6 @@ def generate_launch_description():
     initial_pose_topic = LaunchConfiguration("initial_pose_topic")
     goal_topic = LaunchConfiguration("goal_topic")
     global_path_topic = LaunchConfiguration("global_path_topic")
-    scan_initial_path_topic = LaunchConfiguration("scan_initial_path_topic")
-    path_cropper_update_rate = LaunchConfiguration("path_cropper_update_rate")
-    path_window_robot_aligned = LaunchConfiguration("path_window_robot_aligned")
     local_target_distance = LaunchConfiguration("local_target_distance")
     grid_visualization_rate_hz = LaunchConfiguration("grid_visualization_rate_hz")
     runtime_log_enabled = LaunchConfiguration("runtime_log_enabled")
@@ -44,7 +41,7 @@ def generate_launch_description():
     scan_planner_launch = PathJoinSubstitution([
         FindPackageShare("scan_planner"),
         "launch",
-        "run_windowed.launch.py",
+        "run.launch.py",
     ])
     astar_config = PathJoinSubstitution([
         FindPackageShare("nav3d_global_planning"),
@@ -63,11 +60,6 @@ def generate_launch_description():
     ])
 
     return LaunchDescription([
-        DeclareLaunchArgument(
-            "scan_initial_path_topic",
-            default_value="/scan_planner/initial_path",
-            description="Cropped global path passed to SCAN-Planner",
-        ),
         DeclareLaunchArgument("map_pcd_path", description="PCD map used by localization and global planning"),
         DeclareLaunchArgument("use_sim_time", default_value="false"),
         DeclareLaunchArgument("map_frame", default_value="map"),
@@ -92,24 +84,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument("initial_pose_topic", default_value="/initialpose"),
         DeclareLaunchArgument("goal_topic", default_value="/move_base_simple/goal"),
-        DeclareLaunchArgument(
-            "global_path_topic",
-            default_value="/planned_path",
-            description="Stable full global path published by the global planner",
-        ),
-        DeclareLaunchArgument(
-            "path_cropper_update_rate",
-            default_value="20.0",
-            description="Global-path window cropper update rate in Hz",
-        ),
-        DeclareLaunchArgument(
-            "path_window_robot_aligned",
-            default_value="false",
-            description=(
-                "Whether the crop window rotates with robot yaw; must match the "
-                "SCAN-Planner sliding-window definition"
-            ),
-        ),
+        DeclareLaunchArgument("global_path_topic", default_value="/planned_path"),
         DeclareLaunchArgument(
             "local_target_distance",
             default_value="4.0",
@@ -297,13 +272,7 @@ def generate_launch_description():
                 "cmd_vel_topic": cmd_vel_topic,
                 "initial_pose_topic": initial_pose_topic,
                 "goal_topic": goal_topic,
-                # Full FastPlanner path. run_windowed.launch.py crops this path before
-                # remapping the cropped segment into SCAN-Planner's `initial_path`.
                 "global_path_topic": global_path_topic,
-                "scan_initial_path_topic": scan_initial_path_topic,
-                "path_cropper_robot_frame": base_frame,
-                "path_cropper_update_rate": path_cropper_update_rate,
-                "path_window_robot_aligned": path_window_robot_aligned,
                 "local_target_distance": local_target_distance,
                 "grid_visualization_rate_hz": grid_visualization_rate_hz,
                 "runtime_log_enabled": runtime_log_enabled,

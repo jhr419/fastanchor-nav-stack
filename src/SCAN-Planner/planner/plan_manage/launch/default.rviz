@@ -3,9 +3,10 @@ Panels:
     Help Height: 0
     Name: Displays
     Property Tree Widget:
-      Expanded: ~
+      Expanded:
+        - /Global Map1
       Splitter Ratio: 0.5
-    Tree Height: 1206
+    Tree Height: 1766
   - Class: rviz_common/Selection
     Name: Selection
   - Class: rviz_common/Tool Properties
@@ -254,8 +255,8 @@ Visualization Manager:
     - Alpha: 1
       Autocompute Intensity Bounds: true
       Autocompute Value Bounds:
-        Max Value: 20.178617477416992
-        Min Value: -20.31769561767578
+        Max Value: 18.646272659301758
+        Min Value: -40.70890808105469
         Value: true
       Axis: X
       Channel Name: intensity
@@ -273,7 +274,7 @@ Visualization Manager:
       Position Transformer: XYZ
       Selectable: true
       Size (Pixels): 1
-      Size (m): 0.012000000104308128
+      Size (m): 0.019999999552965164
       Style: Flat Squares
       Topic:
         Depth: 1
@@ -322,8 +323,8 @@ Visualization Manager:
     - Alpha: 1
       Autocompute Intensity Bounds: true
       Autocompute Value Bounds:
-        Max Value: 0.574999988079071
-        Min Value: -0.125
+        Max Value: 0.6499999761581421
+        Min Value: -0.05000000074505806
         Value: true
       Axis: Z
       Channel Name: intensity
@@ -356,8 +357,8 @@ Visualization Manager:
     - Alpha: 1
       Autocompute Intensity Bounds: true
       Autocompute Value Bounds:
-        Max Value: 0.574999988079071
-        Min Value: -0.5249999761581421
+        Max Value: 0.6499999761581421
+        Min Value: -0.44999998807907104
         Value: true
       Axis: Z
       Channel Name: intensity
@@ -489,17 +490,25 @@ Visualization Manager:
           Value: true
         base:
           Value: true
+        base_link:
+          Value: true
+        body:
+          Value: true
+        camera_init:
+          Value: true
         front_camera:
           Value: true
         imu_link:
           Value: true
-        sensor:
+        livox_frame:
+          Value: true
+        map:
+          Value: true
+        odom:
           Value: true
         sliding_map:
           Value: true
         trunk:
-          Value: true
-        world:
           Value: true
       Marker Scale: 1
       Name: TF
@@ -507,59 +516,11 @@ Visualization Manager:
       Show Axes: true
       Show Names: false
       Tree:
-        world:
-          base:
-            trunk:
-              FL_hip:
-                FL_thigh:
-                  FL_calf:
-                    FL_foot:
-                      {}
-                  FL_calf_rotor:
-                    {}
-                FL_thigh_rotor:
-                  {}
-              FL_hip_rotor:
+        map:
+          odom:
+            base_link:
+              livox_frame:
                 {}
-              FR_hip:
-                FR_thigh:
-                  FR_calf:
-                    FR_foot:
-                      {}
-                  FR_calf_rotor:
-                    {}
-                FR_thigh_rotor:
-                  {}
-              FR_hip_rotor:
-                {}
-              RL_hip:
-                RL_thigh:
-                  RL_calf:
-                    RL_foot:
-                      {}
-                  RL_calf_rotor:
-                    {}
-                RL_thigh_rotor:
-                  {}
-              RL_hip_rotor:
-                {}
-              RR_hip:
-                RR_thigh:
-                  RR_calf:
-                    RR_foot:
-                      {}
-                  RR_calf_rotor:
-                    {}
-                RR_thigh_rotor:
-                  {}
-              RR_hip_rotor:
-                {}
-              front_camera:
-                {}
-              imu_link:
-                {}
-          sensor:
-            {}
           sliding_map:
             {}
       Update Interval: 0
@@ -624,39 +585,39 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz_default_plugins/Orbit
-      Distance: 31.07322120666504
+      Distance: 17.927268981933594
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
         Swap Stereo Eyes: false
         Value: false
       Focal Point:
-        X: -4.47959041595459
-        Y: 1.29607355594635
-        Z: -8.791008949279785
+        X: -1.9176585674285889
+        Y: -1.0793381929397583
+        Z: 0.7468469142913818
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 1.0549992322921753
+      Pitch: 1.5697963237762451
       Target Frame: <Fixed Frame>
       Value: Orbit (rviz_default_plugins)
-      Yaw: 2.970010995864868
+      Yaw: 4.736145973205566
     Saved: ~
 Window Geometry:
   Displays:
     collapsed: false
-  Height: 1472
+  Height: 2032
   Hide Left Dock: false
   Hide Right Dock: false
-  QMainWindow State: 000000ff00000000fd00000001000000000000032f00000524fc0200000004fb000000100044006900730070006c006100790073010000006e000005240000018200fffffffb0000001200530065006c0065006300740069006f006e000000031d00000135000000b000fffffffb0000001e0054006f006f006c002000500072006f007000650072007400690065007300000003f900000199000000b000fffffffb0000000a00560069006500770073000000041b000001770000013200ffffff000006410000052400000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000
+  QMainWindow State: 000000ff00000000fd00000001000000000000032f00000754fc0200000004fb000000100044006900730070006c006100790073010000006e000007540000018200fffffffb0000001200530065006c0065006300740069006f006e000000031d00000135000000b000fffffffb0000001e0054006f006f006c002000500072006f007000650072007400690065007300000003f900000199000000b000fffffffb0000000a00560069006500770073000000041b000001770000013200ffffff00000b390000075400000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000
   Selection:
     collapsed: false
   Tool Properties:
     collapsed: false
   Views:
     collapsed: false
-  Width: 2428
-  X: 132
+  Width: 3700
+  X: 140
   Y: 54

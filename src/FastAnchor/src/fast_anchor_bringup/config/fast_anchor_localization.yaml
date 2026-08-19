@@ -58,6 +58,12 @@ fast_anchor_localization_node:
 
     min_scan_points: 120
 
+    # Select the odometry pose at the scan timestamp. This preserves yifanLIO's
+    # high-rate prediction output without letting a future pose seed ICP.
+    lio_sync:
+      tolerance_s: 0.001
+      odom_history_size: 5000
+
     # Process every fresh LiDAR frame, then publish the most recently aligned
     # cloud at a fixed 25 Hz. Repeated publications keep their acquisition stamp
     # so mapping consumers can reject duplicate observations.
@@ -85,3 +91,4 @@ fast_anchor_localization_node:
       publish_aligned_cloud: true
       publish_local_map: true
       print_icp_score: true
+      lio_input_stats: true

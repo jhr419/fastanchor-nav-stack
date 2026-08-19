@@ -1,6 +1,10 @@
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <limits>
+#include <map>
 #include <mutex>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -34,6 +38,12 @@ namespace
 {
 
 using PointType = pcl::PointXYZI;
+
+int64_t stampNanoseconds(const builtin_interfaces::msg::Time & stamp)
+{
+  return static_cast<int64_t>(stamp.sec) * 1000000000LL +
+         static_cast<int64_t>(stamp.nanosec);
+}
 
 Eigen::Affine3d poseToAffine(const geometry_msgs::msg::Pose & pose)
 {
@@ -235,6 +245,18 @@ public:
       declare_parameter<double>("output.aligned_cloud_publish_rate_hz", aligned_cloud_publish_rate_hz_);
     path_publish_interval_s_ =
       declare_parameter<double>("output.path_publish_interval_s", path_publish_interval_s_);
+    lio_sync_tolerance_s_ =
+      declare_parameter<double>("lio_sync.tolerance_s", lio_sync_tolerance_s_);
+    lio_odom_history_size_ =
+      declare_parameter<int>("lio_sync.odom_history_size", lio_odom_history_size_);
+    lio_input_stats_enabled_ =
+      declare_parameter<bool>("debug.lio_input_stats", true);
+    if (lio_sync_tolerance_s_ < 0.0) {
+      throw std::runtime_error("lio_sync.tolerance_s must be non-negative");
+    }
+    if (lio_odom_history_size_ < 2) {
+      throw std::runtime_error("lio_sync.odom_history_size must be at least 2");
+    }
 
     base_to_body_ = makeTransform(base_to_body_xyz, base_to_body_rpy);
     body_to_base_ = base_to_body_.inverse();
@@ -384,6 +406,16 @@ private:
     }
     latest_odom_to_body_ = poseToAffine(msg->pose.pose);
     latest_odom_to_base_ = latest_odom_to_body_ * body_to_base_;
+    const int64_t stamp_ns = stampNanoseconds(msg->header.stamp);
+    // yifanLIO intentionally interleaves high-rate IMU predictions with a
+    // scan-time posterior odometry message. The posterior can therefore arrive
+    // after messages carrying newer timestamps. std::map keeps both samples in
+    // timestamp order, so accept this legitimate out-of-order stream.
+    odom_history_[stamp_ns] = OdomSample{
+      latest_odom_to_body_, latest_odom_to_base_, msg->header.stamp};
+    while (static_cast<int>(odom_history_.size()) > lio_odom_history_size_) {
+      odom_history_.erase(odom_history_.begin());
+    }
     if (!have_odom_) {
       RCLCPP_INFO(get_logger(), "Received first odometry from %s.", odom_topic_.c_str());
     }
@@ -620,7 +652,20 @@ private:
       return;
     }
 
-    const Eigen::Affine3d guess_map_to_base = map_to_odom_ * latest_odom_to_base_;
+    OdomSample scan_odom;
+    double odom_scan_delta_s = 0.0;
+    if (!findOdomForScan(msg->header.stamp, scan_odom, odom_scan_delta_s)) {
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 3000,
+        "No odometry matches scan stamp %d.%09u within %.3f ms; skip this scan instead of using a newer prediction.",
+        msg->header.stamp.sec, msg->header.stamp.nanosec, lio_sync_tolerance_s_ * 1000.0);
+      publishStatus(
+        msg->header.stamp, fast_anchor_interfaces::msg::LocalizationStatus::WAITING_FOR_LIO,
+        "waiting for timestamp-matched LIO odometry", false, last_icp_fitness_score_);
+      return;
+    }
+
+    const Eigen::Affine3d guess_map_to_base = map_to_odom_ * scan_odom.odom_to_base;
     const rclcpp::Time stamp(msg->header.stamp);
     const double since_last_icp = (stamp - last_icp_stamp_).seconds();
     const double since_last_aligned = (stamp - last_aligned_cloud_stamp_).seconds();
@@ -634,6 +679,7 @@ private:
     }
 
     auto source_base = makeSourceCloud(*msg);
+    logLioInputStats(*msg, *source_base, scan_odom, odom_scan_delta_s);
     if (static_cast<int>(source_base->size()) < min_scan_points_) {
       RCLCPP_WARN_THROTTLE(
         get_logger(), *get_clock(), 3000,
@@ -651,7 +697,7 @@ private:
       pcl::PointCloud<PointType> aligned;
       pcl::transformPointCloud(
         *source_base, aligned, guess_map_to_base.matrix().cast<float>());
-      publishTfAndPose(msg->header.stamp, guess_map_to_base, -1.0);
+      publishTfAndPose(msg->header.stamp, guess_map_to_base, scan_odom.odom_to_base, -1.0);
       publishAlignedCloud(aligned, msg->header.stamp);
       last_aligned_cloud_stamp_ = stamp;
       publishStatus(
@@ -674,7 +720,7 @@ private:
         "ICP rejected: converged=%s fitness=%.4f threshold=%.4f",
         icp_.hasConverged() ? "true" : "false",
         fitness, fitness_score_threshold_);
-      publishTfAndPose(msg->header.stamp, guess_map_to_base, fitness);
+      publishTfAndPose(msg->header.stamp, guess_map_to_base, scan_odom.odom_to_base, fitness);
       publishAlignedCloud(aligned, msg->header.stamp);
       last_aligned_cloud_stamp_ = stamp;
       publishIcpResult(msg->header.stamp, false, fitness, guess_map_to_base);
@@ -686,10 +732,12 @@ private:
 
     const Eigen::Affine3f refined_f(icp_.getFinalTransformation());
     const Eigen::Affine3d refined_map_to_base(refined_f.matrix().cast<double>());
-    map_to_odom_ = refined_map_to_base * latest_odom_to_base_.inverse();
+    const Eigen::Affine3d icp_correction = refined_map_to_base * guess_map_to_base.inverse();
+    const Eigen::AngleAxisd correction_rotation(icp_correction.rotation());
+    map_to_odom_ = refined_map_to_base * scan_odom.odom_to_base.inverse();
     last_icp_fitness_score_ = fitness;
     last_icp_converged_ = true;
-    publishTfAndPose(msg->header.stamp, refined_map_to_base, fitness);
+    publishTfAndPose(msg->header.stamp, refined_map_to_base, scan_odom.odom_to_base, fitness);
     publishAlignedCloud(aligned, msg->header.stamp);
     last_aligned_cloud_stamp_ = stamp;
     publishIcpResult(msg->header.stamp, true, fitness, refined_map_to_base);
@@ -698,7 +746,87 @@ private:
       "ICP accepted", true, fitness);
     RCLCPP_INFO_THROTTLE(
       get_logger(), *get_clock(), 1000,
-      "ICP accepted: fitness=%.4f source_points=%zu", fitness, source_base->size());
+      "ICP accepted: fitness=%.4f source_points=%zu correction_xyz=[%.3f %.3f %.3f] "
+      "correction_angle_deg=%.3f",
+      fitness, source_base->size(), icp_correction.translation().x(),
+      icp_correction.translation().y(), icp_correction.translation().z(),
+      correction_rotation.angle() * 180.0 / M_PI);
+  }
+
+  struct OdomSample
+  {
+    Eigen::Affine3d odom_to_body = Eigen::Affine3d::Identity();
+    Eigen::Affine3d odom_to_base = Eigen::Affine3d::Identity();
+    builtin_interfaces::msg::Time stamp;
+  };
+
+  bool findOdomForScan(
+    const builtin_interfaces::msg::Time & scan_stamp,
+    OdomSample & sample,
+    double & delta_s) const
+  {
+    if (odom_history_.empty()) {
+      return false;
+    }
+    const int64_t scan_ns = stampNanoseconds(scan_stamp);
+    auto candidate = odom_history_.lower_bound(scan_ns);
+    auto best = odom_history_.end();
+    int64_t best_abs_delta_ns = std::numeric_limits<int64_t>::max();
+    if (candidate != odom_history_.end()) {
+      best = candidate;
+      best_abs_delta_ns = std::abs(candidate->first - scan_ns);
+    }
+    if (candidate != odom_history_.begin()) {
+      const auto previous = std::prev(candidate);
+      const int64_t previous_abs_delta_ns = std::abs(previous->first - scan_ns);
+      if (previous_abs_delta_ns < best_abs_delta_ns) {
+        best = previous;
+        best_abs_delta_ns = previous_abs_delta_ns;
+      }
+    }
+    if (best == odom_history_.end() ||
+      static_cast<double>(best_abs_delta_ns) * 1e-9 > lio_sync_tolerance_s_)
+    {
+      return false;
+    }
+    sample = best->second;
+    delta_s = static_cast<double>(best->first - scan_ns) * 1e-9;
+    return true;
+  }
+
+  void logLioInputStats(
+    const sensor_msgs::msg::PointCloud2 & msg,
+    const pcl::PointCloud<PointType> & source_base,
+    const OdomSample & odom,
+    const double odom_scan_delta_s)
+  {
+    if (!lio_input_stats_enabled_ || source_base.empty()) {
+      return;
+    }
+    Eigen::Vector3d min_xyz = Eigen::Vector3d::Constant(
+      std::numeric_limits<double>::infinity());
+    Eigen::Vector3d max_xyz = Eigen::Vector3d::Constant(
+      -std::numeric_limits<double>::infinity());
+    Eigen::Vector3d centroid = Eigen::Vector3d::Zero();
+    for (const auto & point : source_base.points) {
+      const Eigen::Vector3d xyz(point.x, point.y, point.z);
+      min_xyz = min_xyz.cwiseMin(xyz);
+      max_xyz = max_xyz.cwiseMax(xyz);
+      centroid += xyz;
+    }
+    centroid /= static_cast<double>(source_base.size());
+    const Eigen::Quaterniond odom_q(odom.odom_to_body.rotation());
+    const auto odom_xyz = odom.odom_to_body.translation();
+    RCLCPP_INFO_THROTTLE(
+      get_logger(), *get_clock(), 3000,
+      "[LIO INPUT] cloud_frame=%s stamp=%d.%09u odom_delta_ms=%.3f raw_points=%u "
+      "filtered_points=%zu min=[%.2f %.2f %.2f] max=[%.2f %.2f %.2f] "
+      "centroid=[%.2f %.2f %.2f] odom_xyz=[%.3f %.3f %.3f] odom_q_xyzw=[%.4f %.4f %.4f %.4f]",
+      msg.header.frame_id.c_str(), msg.header.stamp.sec, msg.header.stamp.nanosec,
+      odom_scan_delta_s * 1000.0, msg.width * msg.height, source_base.size(),
+      min_xyz.x(), min_xyz.y(), min_xyz.z(), max_xyz.x(), max_xyz.y(), max_xyz.z(),
+      centroid.x(), centroid.y(), centroid.z(), odom_xyz.x(), odom_xyz.y(), odom_xyz.z(),
+      odom_q.x(), odom_q.y(), odom_q.z(), odom_q.w());
   }
 
   pcl::PointCloud<PointType>::Ptr makeSourceCloud(const sensor_msgs::msg::PointCloud2 & msg) const
@@ -738,6 +866,7 @@ private:
   void publishTfAndPose(
     const builtin_interfaces::msg::Time & stamp,
     const Eigen::Affine3d & map_to_base,
+    const Eigen::Affine3d & synchronized_odom_to_base,
     const double fitness)
   {
     if (publish_tf_) {
@@ -748,7 +877,7 @@ private:
 
     if (publish_base_tf_) {
       const auto odom_to_base =
-        odom_coincident_with_base_ ? Eigen::Affine3d::Identity() : latest_odom_to_base_;
+        odom_coincident_with_base_ ? Eigen::Affine3d::Identity() : synchronized_odom_to_base;
       const auto transform = affineToTransform(stamp, odom_frame_, base_frame_, odom_to_base);
       tf_broadcaster_->sendTransform(transform);
     }
@@ -941,6 +1070,7 @@ private:
   bool visualization_map_published_ = false;
   bool icp_map_published_ = false;
   bool use_initial_pose_param_ = false;
+  bool lio_input_stats_enabled_ = true;
   int max_path_size_ = 10000;
 
   double min_range_ = 0.5;
@@ -960,6 +1090,8 @@ private:
   double aligned_cloud_publish_rate_hz_ = 25.0;
   double path_publish_interval_s_ = 0.0;
   double fastlio_reset_timeout_s_ = 1.0;
+  double lio_sync_tolerance_s_ = 0.001;
+  int lio_odom_history_size_ = 5000;
 
   Eigen::Affine3d base_to_body_ = Eigen::Affine3d::Identity();
   Eigen::Affine3d body_to_base_ = Eigen::Affine3d::Identity();
@@ -978,6 +1110,7 @@ private:
   bool have_scan_ = false;
   bool have_initial_pose_ = false;
   bool have_pending_initial_pose_ = false;
+  std::map<int64_t, OdomSample> odom_history_;
   nav_msgs::msg::Path path_msg_;
 
   pcl::PointCloud<PointType>::Ptr icp_map_cloud_;

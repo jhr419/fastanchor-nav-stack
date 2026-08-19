@@ -92,7 +92,7 @@ FastAnchor 的 LIO 前端可替换，通过 launch 参数 `lio_backend` 选择�
 ros2 launch fast_anchor_bringup fast_anchor_mid360.launch.py lio_backend:=fastlio2
 
 # yifanLIO 后端
-ros2 launch fast_anchor_bringup fast_anchor_mid360.launch.py lio_backend:=yifanlio
+ros2 launch fast_anchor_bringup fast_anchor_mid360.launch.py lio_backend:=yifanlio lidar_model:=mid360
 ```
 
 非法取值会在 launch 阶段直接报错并停止，不会静默回退。
@@ -104,6 +104,9 @@ ros2 launch fast_anchor_bringup fast_anchor_mid360.launch.py lio_backend:=yifanl
 
 FastLIO2 原生输出该接口；yifanLIO 输出 `/LIO/odom_imu`（`world -> IMU`）与
 `/LIO/clouds_lidar`（`lidar` 系），由 `yifan_lio_adapter` 转换为统一接口。
+yifanLIO 原生的高频物理 IMU 位姿保持不变；adapter 在公共接口上同步转换 pose
+与 cloud 到 FastLIO2 使用的虚拟 body，并且 FastAnchor 按 scan 时间戳选取 odom，
+避免把更新的 IMU 预测 pose 用作旧 scan 的 ICP 初值。
 
 配置文件：
 
