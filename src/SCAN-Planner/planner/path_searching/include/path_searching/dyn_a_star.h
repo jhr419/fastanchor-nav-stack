@@ -6,6 +6,8 @@
 #include <Eigen/Eigen>
 #include <plan_env/grid_map.h>
 #include <queue>
+#include <string>
+#include <visualization_msgs/msg/marker.hpp>
 
 constexpr double inf = 1 >> 20;
 struct GridNode;
@@ -51,6 +53,12 @@ class AStar
 {
 private:
 	GridMap::Ptr grid_map_;
+	rclcpp::Node *node_{nullptr};
+	rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr search_plane_pub_;
+	std::string search_plane_frame_id_{"world"};
+	double search_plane_z_offset_{0.0};
+	bool visualize_search_plane_{false};
+	bool search_plane_visible_{false};
 
 	inline void coord2gridIndexFast(const double x, const double y, const double z, int &id_x, int &id_y, int &id_z);
 
@@ -69,6 +77,9 @@ private:
 	inline int checkOccupancy(const Eigen::Vector3d &pos, const double yaw) { return grid_map_->getInflateOccupancy(pos, yaw); }
 
 	std::vector<GridNodePtr> retrievePath(GridNodePtr current);
+	void updateSearchPlaneParameters();
+	void publishSearchPlane(const Eigen::Vector3d &start, const Eigen::Vector3d &end);
+	void clearSearchPlaneVisualization();
 
 	double step_size_, inv_step_size_;
 	Eigen::Vector3d center_;
@@ -88,7 +99,7 @@ public:
 	AStar(){};
 	~AStar();
 
-	void initGridMap(GridMap::Ptr occ_map, const Eigen::Vector3i pool_size);
+	void initGridMap(GridMap::Ptr occ_map, const Eigen::Vector3i pool_size, rclcpp::Node *node = nullptr);
 
 	ASTAR_RET AstarSearch(const double step_size, Eigen::Vector3d start_pt, Eigen::Vector3d end_pt);
 

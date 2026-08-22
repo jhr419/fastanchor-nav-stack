@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <geometry_msgs/msg/point.hpp>
 
 using namespace std;
 using namespace Eigen;
@@ -14,7 +15,7 @@ AStar::~AStar()
                 delete GridNodeMap_[i][j][k];
 }
 
-void AStar::initGridMap(GridMap::Ptr occ_map, const Eigen::Vector3i pool_size)
+void AStar::initGridMap(GridMap::Ptr occ_map, const Eigen::Vector3i pool_size, rclcpp::Node *node)
 {
     POOL_SIZE_ = pool_size;
     CENTER_IDX_ = pool_size / 2;
@@ -34,6 +35,120 @@ void AStar::initGridMap(GridMap::Ptr occ_map, const Eigen::Vector3i pool_size)
     }
 
     grid_map_ = occ_map;
+    node_ = node;
+    if (node_ != nullptr)
+    {
+        if (!node_->has_parameter("astar.search_plane_z_offset"))
+            node_->declare_parameter<double>("astar.search_plane_z_offset", 0.0);
+        if (!node_->has_parameter("astar.visualize_search_plane"))
+            node_->declare_parameter<bool>("astar.visualize_search_plane", false);
+
+        node_->get_parameter("grid_map.frame_id", search_plane_frame_id_);
+        const auto marker_qos = rclcpp::QoS(2).reliable().transient_local();
+        search_plane_pub_ = node_->create_publisher<visualization_msgs::msg::Marker>(
+            "a_star_search_plane", marker_qos);
+        updateSearchPlaneParameters();
+        RCLCPP_INFO(node_->get_logger(),
+                    "A-star search plane: z_offset=%.3f, visualization=%s, frame=%s",
+                    search_plane_z_offset_, visualize_search_plane_ ? "enabled" : "disabled",
+                    search_plane_frame_id_.c_str());
+    }
+}
+
+void AStar::updateSearchPlaneParameters()
+{
+    if (node_ == nullptr)
+        return;
+
+    node_->get_parameter("astar.search_plane_z_offset", search_plane_z_offset_);
+    node_->get_parameter("astar.visualize_search_plane", visualize_search_plane_);
+    node_->get_parameter("grid_map.frame_id", search_plane_frame_id_);
+}
+
+void AStar::clearSearchPlaneVisualization()
+{
+    if (!search_plane_visible_ || search_plane_pub_ == nullptr)
+        return;
+
+    visualization_msgs::msg::Marker marker;
+    marker.header.frame_id = search_plane_frame_id_;
+    marker.header.stamp = node_->now();
+    marker.ns = "a_star_search_plane";
+    marker.action = visualization_msgs::msg::Marker::DELETEALL;
+    search_plane_pub_->publish(marker);
+    search_plane_visible_ = false;
+}
+
+void AStar::publishSearchPlane(const Eigen::Vector3d &start, const Eigen::Vector3d &end)
+{
+    if (!visualize_search_plane_)
+    {
+        clearSearchPlaneVisualization();
+        return;
+    }
+    if (search_plane_pub_ == nullptr)
+        return;
+
+    Eigen::Vector2d longitudinal = end.head<2>() - start.head<2>();
+    if (longitudinal.squaredNorm() < 1e-8)
+        longitudinal = Eigen::Vector2d::UnitX();
+    else
+        longitudinal.normalize();
+    const Eigen::Vector2d lateral(-longitudinal.y(), longitudinal.x());
+    const double half_width = 0.5 * std::min(POOL_SIZE_(0), POOL_SIZE_(1)) * step_size_;
+
+    Eigen::Vector3d start_left = start;
+    Eigen::Vector3d start_right = start;
+    Eigen::Vector3d end_left = end;
+    Eigen::Vector3d end_right = end;
+    start_left.head<2>() += lateral * half_width;
+    start_right.head<2>() -= lateral * half_width;
+    end_left.head<2>() += lateral * half_width;
+    end_right.head<2>() -= lateral * half_width;
+    start_left.z() += search_plane_z_offset_;
+    start_right.z() += search_plane_z_offset_;
+    end_left.z() += search_plane_z_offset_;
+    end_right.z() += search_plane_z_offset_;
+
+    const auto toPoint = [](const Eigen::Vector3d &point) {
+        geometry_msgs::msg::Point msg;
+        msg.x = point.x();
+        msg.y = point.y();
+        msg.z = point.z();
+        return msg;
+    };
+
+    visualization_msgs::msg::Marker surface;
+    surface.header.frame_id = search_plane_frame_id_;
+    surface.header.stamp = node_->now();
+    surface.ns = "a_star_search_plane";
+    surface.id = 0;
+    surface.type = visualization_msgs::msg::Marker::TRIANGLE_LIST;
+    surface.action = visualization_msgs::msg::Marker::ADD;
+    surface.pose.orientation.w = 1.0;
+    surface.scale.x = surface.scale.y = surface.scale.z = 1.0;
+    surface.color.r = 0.0f;
+    surface.color.g = 0.65f;
+    surface.color.b = 1.0f;
+    surface.color.a = 0.22f;
+    surface.points = {
+        toPoint(start_left), toPoint(start_right), toPoint(end_right),
+        toPoint(start_left), toPoint(end_right), toPoint(end_left)};
+    search_plane_pub_->publish(surface);
+
+    visualization_msgs::msg::Marker outline = surface;
+    outline.id = 1;
+    outline.type = visualization_msgs::msg::Marker::LINE_STRIP;
+    outline.scale.x = std::max(0.02, step_size_ * 0.2);
+    outline.color.r = 0.0f;
+    outline.color.g = 0.85f;
+    outline.color.b = 1.0f;
+    outline.color.a = 0.9f;
+    outline.points = {
+        toPoint(start_left), toPoint(start_right), toPoint(end_right),
+        toPoint(end_left), toPoint(start_left)};
+    search_plane_pub_->publish(outline);
+    search_plane_visible_ = true;
 }
 
 double AStar::getDiagHeu(GridNodePtr node1, GridNodePtr node2)
@@ -148,6 +263,8 @@ ASTAR_RET AStar::AstarSearch(const double step_size, Vector3d start_pt, Vector3d
     const auto time_1 = std::chrono::steady_clock::now();
     ++rounds_;
 
+    updateSearchPlaneParameters();
+
     step_size_ = step_size;
     inv_step_size_ = 1 / step_size;
     center_ = (start_pt + end_pt) / 2;
@@ -168,16 +285,33 @@ ASTAR_RET AStar::AstarSearch(const double step_size, Vector3d start_pt, Vector3d
 
     auto interpolateZIndexOnSearchPlane = [&](const int x_idx, const int y_idx) -> int {
         if (search_xy_len2 < 1e-8)
-            return start_idx(2);
+        {
+            const double z = search_start(2) + search_plane_z_offset_;
+            return static_cast<int>(std::lround((z - center_(2)) * inv_step_size_)) + CENTER_IDX_(2);
+        }
 
         Eigen::Vector3i sample_idx(x_idx, y_idx, start_idx(2));
         const Eigen::Vector2d sample_xy = Index2Coord(sample_idx).head<2>();
         double ratio = (sample_xy - search_start_xy).dot(search_xy_delta) / search_xy_len2;
         ratio = std::max(0.0, std::min(1.0, ratio));
 
-        const double z = search_start(2) + ratio * (search_end(2) - search_start(2));
-        return static_cast<int>((z - center_(2)) * inv_step_size_ + 0.5) + CENTER_IDX_(2);
+        const double z = search_start(2) + ratio * (search_end(2) - search_start(2)) +
+                         search_plane_z_offset_;
+        return static_cast<int>(std::lround((z - center_(2)) * inv_step_size_)) + CENTER_IDX_(2);
     };
+
+    publishSearchPlane(search_start, search_end);
+
+    start_idx(2) = interpolateZIndexOnSearchPlane(start_idx(0), start_idx(1));
+    end_idx(2) = interpolateZIndexOnSearchPlane(end_idx(0), end_idx(1));
+    if (start_idx(2) < 1 || start_idx(2) >= POOL_SIZE_(2) - 1 ||
+        end_idx(2) < 1 || end_idx(2) >= POOL_SIZE_(2) - 1)
+    {
+        RCLCPP_ERROR(rclcpp::get_logger("path_searching"),
+                     "A-star search plane offset %.3f moves an endpoint outside the search pool",
+                     search_plane_z_offset_);
+        return ASTAR_RET::INIT_ERR;
+    }
 
     // if ( start_pt(0) > -1 && start_pt(0) < 0 )
     //     cout << "start_pt=" << start_pt.transpose() << " end_pt=" << end_pt.transpose() << endl;

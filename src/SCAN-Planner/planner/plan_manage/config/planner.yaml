@@ -57,6 +57,11 @@ scan_planner_node:
     manager.feasibility_tolerance: 0.5
     manager.planning_horizon: 7.5
 
+    # Projected A*: interpolate z from segment start to end, then add this offset.
+    astar.search_plane_z_offset: 0.0
+    # Publish the live plane on /a_star_search_plane for RViz.
+    astar.visualize_search_plane: false
+
     optimization.lambda_smooth: 1.0
     optimization.lambda_collision: 1.0
     optimization.lambda_feasibility: 0.1
