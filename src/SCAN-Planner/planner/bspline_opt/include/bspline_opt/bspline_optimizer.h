@@ -113,6 +113,8 @@ namespace scan_planner
     double lambda2_, new_lambda2_; // distance weight
     double lambda3_;               // feasibility weight
     double lambda4_;               // curve fitting
+    bool occupied_start_recovery_enabled_{false};
+    double occupied_start_recovery_radius_{0.6};
     int a;
     //
     double dist0_;             // safe distance
@@ -139,8 +141,9 @@ namespace scan_planner
     void calcDistanceCostRebound(const Eigen::MatrixXd &q, double &cost, Eigen::MatrixXd &gradient, int iter_num, double smoothness_cost);
     void calcFitnessCost(const Eigen::MatrixXd &q, double &cost, Eigen::MatrixXd &gradient);
     bool check_collision_and_rebound(void);
-    double estimateSegmentYaw(const Eigen::Vector3d &from, const Eigen::Vector3d &to) const;
-    double estimateControlPointYaw(const Eigen::MatrixXd &q, int id) const;
+    Eigen::Vector3d estimateSegmentDirection(const Eigen::Vector3d &from,
+                                             const Eigen::Vector3d &to) const;
+    Eigen::Vector3d estimateControlPointDirection(const Eigen::MatrixXd &q, int id) const;
 
     static int earlyExit(void *func_data, const double *x, const double *g, const double fx, const double xnorm, const double gnorm, const double step, int n, int k, int ls);
     static double costFunctionRebound(void *func_data, const double *x, double *grad, const int n);

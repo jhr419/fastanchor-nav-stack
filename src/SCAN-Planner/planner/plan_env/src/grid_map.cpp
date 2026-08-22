@@ -488,6 +488,13 @@ void GridMap::initMap(rclcpp::Node *node)
   load_parameter(node_, "grid_map.obstacles_inflation_z_down", mp_.obstacles_inflation_z_down, -1.0);
   load_parameter(node_, "grid_map.double_cylinder_radius", mp_.double_cylinder_radius_, -1.0);
   load_parameter(node_, "grid_map.double_cylinder_offset", mp_.double_cylinder_offset_, 0.0);
+  load_parameter(node_, "grid_map.vertical_inflation_from_robot_extent",
+                 mp_.vertical_inflation_from_robot_extent_, false);
+  load_parameter(node_, "grid_map.double_cylinder_slope_aware",
+                 mp_.double_cylinder_slope_aware_, false);
+  load_parameter(node_, "grid_map.double_cylinder_max_slope",
+                 mp_.double_cylinder_max_slope_, 1.0);
+  mp_.double_cylinder_max_slope_ = std::max(0.0, mp_.double_cylinder_max_slope_);
   load_parameter(node_, "grid_map.map_sliding_en", mp_.map_sliding_en_, true);
   load_parameter(node_, "grid_map.map_sliding_thresh", mp_.map_sliding_thresh_, mp_.resolution_);
 
@@ -688,8 +695,19 @@ void GridMap::rebuildInflationOffsets()
 {
   const double double_radius = std::max(0.0, mp_.double_cylinder_radius_);
   const int inf_step_xy = ceil(double_radius / mp_.resolution_);
-  const int inf_step_z_up = ceil(mp_.obstacles_inflation_z_up / mp_.resolution_);
-  const int inf_step_z_down = ceil(mp_.obstacles_inflation_z_down / mp_.resolution_);
+  const double configured_z_up = std::max(0.0, mp_.obstacles_inflation_z_up);
+  const double configured_z_down = std::max(0.0, mp_.obstacles_inflation_z_down);
+
+  // For a robot body [q - down, q + up], an obstacle point o blocks robot
+  // reference positions q in [o - up, o + down].
+  const double inflation_z_up = mp_.vertical_inflation_from_robot_extent_
+                                    ? configured_z_down
+                                    : configured_z_up;
+  const double inflation_z_down = mp_.vertical_inflation_from_robot_extent_
+                                      ? configured_z_up
+                                      : configured_z_down;
+  const int inf_step_z_up = ceil(inflation_z_up / mp_.resolution_);
+  const int inf_step_z_down = ceil(inflation_z_down / mp_.resolution_);
 
   md_.inflate_offsets_.clear();
   for (int x = -inf_step_xy; x <= inf_step_xy; ++x)
@@ -702,6 +720,14 @@ void GridMap::rebuildInflationOffsets()
       for (int z = -inf_step_z_down; z <= inf_step_z_up; ++z)
         md_.inflate_offsets_.push_back(Eigen::Vector3i(x, y, z));
     }
+
+  RCLCPP_INFO(node_->get_logger(),
+              "[GridMap] collision body: radius=%.2f offset=%.2f robot_z=[-%.2f,+%.2f] "
+              "obstacle_inflation_z=[-%.2f,+%.2f] slope_aware=%s max_slope=%.2f",
+              double_radius, mp_.double_cylinder_offset_, configured_z_down, configured_z_up,
+              inflation_z_down, inflation_z_up,
+              mp_.double_cylinder_slope_aware_ ? "true" : "false",
+              mp_.double_cylinder_max_slope_);
 }
 
 void GridMap::resetAllMapData()

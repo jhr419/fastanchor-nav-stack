@@ -59,6 +59,9 @@ private:
 	double search_plane_z_offset_{0.0};
 	bool visualize_search_plane_{false};
 	bool search_plane_visible_{false};
+	bool occupied_start_recovery_enabled_{false};
+	double occupied_start_recovery_radius_{0.6};
+	double occupied_start_penalty_{5.0};
 
 	inline void coord2gridIndexFast(const double x, const double y, const double z, int &id_x, int &id_y, int &id_z);
 
@@ -74,7 +77,10 @@ private:
 
 	//bool (*checkOccupancyPtr)( const Eigen::Vector3d &pos );
 
-	inline int checkOccupancy(const Eigen::Vector3d &pos, const double yaw) { return grid_map_->getInflateOccupancy(pos, yaw); }
+	inline int checkOccupancy(const Eigen::Vector3d &pos, const Eigen::Vector3d &path_direction)
+	{
+		return grid_map_->getInflateOccupancy(pos, path_direction);
+	}
 
 	std::vector<GridNodePtr> retrievePath(GridNodePtr current);
 	void updateSearchPlaneParameters();

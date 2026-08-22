@@ -21,9 +21,15 @@ scan_planner_node:
     grid_map.map_sliding_thresh: 0.2
     grid_map.double_cylinder_radius: 0.25
     grid_map.double_cylinder_offset: 0.18
+    # Shift the front/rear footprint samples in z along the local path slope.
+    grid_map.double_cylinder_slope_aware: true
+    grid_map.double_cylinder_max_slope: 1.0
     grid_map.body_height: 0.5
+    # Legacy names: these values describe the robot body above/below its reference point.
     grid_map.obstacles_inflation_z_up: 0.10
     grid_map.obstacles_inflation_z_down: 0.4
+    # Invert robot extents into configuration space. Requires path z to follow terrain height.
+    grid_map.vertical_inflation_from_robot_extent: true
     grid_map.frame_id: world
     grid_map.sliding_map_frame_id: sliding_map
     grid_map.ground_height: 0.0
@@ -61,6 +67,10 @@ scan_planner_node:
     astar.search_plane_z_offset: 0.0
     # Publish the live plane on /a_star_search_plane for RViz.
     astar.visualize_search_plane: false
+    # Allow A* to leave a falsely occupied start region, but never re-enter it.
+    astar.occupied_start_recovery_enabled: true
+    astar.occupied_start_recovery_radius: 0.6
+    astar.occupied_start_penalty: 5.0
 
     optimization.lambda_smooth: 1.0
     optimization.lambda_collision: 1.0

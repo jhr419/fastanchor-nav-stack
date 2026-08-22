@@ -21,6 +21,12 @@ namespace scan_planner
     dist0_ = get_double("optimization.dist0", -1.0);
     max_vel_ = get_double("optimization.max_vel", -1.0);
     max_acc_ = get_double("optimization.max_acc", -1.0);
+    if (!node->has_parameter("astar.occupied_start_recovery_enabled"))
+      node->declare_parameter<bool>("astar.occupied_start_recovery_enabled", false);
+    occupied_start_recovery_enabled_ =
+        node->get_parameter("astar.occupied_start_recovery_enabled").as_bool();
+    occupied_start_recovery_radius_ = std::max(
+        0.0, get_double("astar.occupied_start_recovery_radius", 0.6));
     if (!node->has_parameter("optimization.order")) node->declare_parameter<int>("optimization.order", 3);
     order_ = static_cast<int>(node->get_parameter("optimization.order").as_int());
   }
@@ -30,22 +36,23 @@ namespace scan_planner
     this->grid_map_ = env;
   }
 
-  double BsplineOptimizer::estimateSegmentYaw(const Eigen::Vector3d &from, const Eigen::Vector3d &to) const
+  Eigen::Vector3d BsplineOptimizer::estimateSegmentDirection(const Eigen::Vector3d &from,
+                                                              const Eigen::Vector3d &to) const
   {
-    Eigen::Vector2d diff(to(0) - from(0), to(1) - from(1));
-    if (diff.squaredNorm() < 1e-8)
-      return 0.0;
-    return std::atan2(diff(1), diff(0));
+    const Eigen::Vector3d direction = to - from;
+    if (direction.head<2>().squaredNorm() < 1e-8)
+      return Eigen::Vector3d::UnitX();
+    return direction;
   }
 
-  double BsplineOptimizer::estimateControlPointYaw(const Eigen::MatrixXd &q, int id) const
+  Eigen::Vector3d BsplineOptimizer::estimateControlPointDirection(const Eigen::MatrixXd &q, int id) const
   {
     if (q.cols() <= 1)
-      return 0.0;
+      return Eigen::Vector3d::UnitX();
 
     int prev_id = std::max(0, id - 1);
     int next_id = std::min(static_cast<int>(q.cols()) - 1, id + 1);
-    return estimateSegmentYaw(q.col(prev_id), q.col(next_id));
+    return estimateSegmentDirection(q.col(prev_id), q.col(next_id));
   }
 
   void BsplineOptimizer::setControlPoints(const Eigen::MatrixXd &points)
@@ -82,8 +89,9 @@ namespace scan_planner
       for (double a = 1.0; a >= 0.0; a -= step_size)
       {
         Eigen::Vector3d sample_pt = a * init_points.col(i - 1) + (1 - a) * init_points.col(i);
-        double sample_yaw = estimateSegmentYaw(init_points.col(i - 1), init_points.col(i));
-        occ = grid_map_->getInflateOccupancy(sample_pt, sample_yaw);
+        const Eigen::Vector3d sample_direction =
+            estimateSegmentDirection(init_points.col(i - 1), init_points.col(i));
+        occ = grid_map_->getInflateOccupancy(sample_pt, sample_direction);
         // cout << setprecision(5);
         // cout << (a * init_points.col(i-1) + (1-a) * init_points.col(i)).transpose() << " occ1=" << occ << endl;
 
@@ -280,8 +288,9 @@ namespace scan_planner
             for (double a = length; a >= 0.0; a -= grid_map_->getResolution())
             {
               Eigen::Vector3d sample_pt = (a / length) * intersection_point + (1 - a / length) * cps_.points.col(j);
-              double sample_yaw = estimateControlPointYaw(cps_.points, j);
-              occ = grid_map_->getInflateOccupancy(sample_pt, sample_yaw);
+              const Eigen::Vector3d sample_direction =
+                  estimateSegmentDirection(intersection_point, cps_.points.col(j));
+              occ = grid_map_->getInflateOccupancy(sample_pt, sample_direction);
 
               if (occ || a < grid_map_->getResolution())
               {
@@ -728,7 +737,8 @@ namespace scan_planner
     for (int i = order_ - 1; i <= i_end; ++i)
     {
 
-      bool occ = grid_map_->getInflateOccupancy(cps_.points.col(i), estimateControlPointYaw(cps_.points, i));
+      bool occ = grid_map_->getInflateOccupancy(
+          cps_.points.col(i), estimateControlPointDirection(cps_.points, i));
 
       /*** check if the new collision will be valid ***/
       if (occ)
@@ -751,7 +761,8 @@ namespace scan_planner
         int j;
         for (j = i - 1; j >= 0; --j)
         {
-          occ = grid_map_->getInflateOccupancy(cps_.points.col(j), estimateControlPointYaw(cps_.points, j));
+          occ = grid_map_->getInflateOccupancy(
+              cps_.points.col(j), estimateControlPointDirection(cps_.points, j));
           if (!occ)
           {
             in_id = j;
@@ -766,7 +777,8 @@ namespace scan_planner
 
         for (j = i + 1; j < cps_.size; ++j)
         {
-          occ = grid_map_->getInflateOccupancy(cps_.points.col(j), estimateControlPointYaw(cps_.points, j));
+          occ = grid_map_->getInflateOccupancy(
+              cps_.points.col(j), estimateControlPointDirection(cps_.points, j));
 
           if (!occ)
           {
@@ -889,8 +901,9 @@ namespace scan_planner
               for (double a = length; a >= 0.0; a -= grid_map_->getResolution())
               {
                 Eigen::Vector3d sample_pt = (a / length) * intersection_point + (1 - a / length) * cps_.points.col(j);
-                double sample_yaw = estimateControlPointYaw(cps_.points, j);
-                bool occ = grid_map_->getInflateOccupancy(sample_pt, sample_yaw);
+                const Eigen::Vector3d sample_direction =
+                    estimateSegmentDirection(intersection_point, cps_.points.col(j));
+                bool occ = grid_map_->getInflateOccupancy(sample_pt, sample_direction);
 
                 if (occ || a < grid_map_->getResolution())
                 {
@@ -1015,11 +1028,31 @@ namespace scan_planner
         double tm, tmp;
         traj.getTimeSpan(tm, tmp);
         double t_step = (tmp - tm) / ((traj.evaluateDeBoorT(tmp) - traj.evaluateDeBoorT(tm)).norm() / grid_map_->getResolution());
+        const Eigen::Vector3d recovery_origin = traj.evaluateDeBoorT(tm);
+        bool occupied_prefix_active = occupied_start_recovery_enabled_;
         for (double t = tm; t < tmp * 2 / 3; t += t_step) // Only check the closest 2/3 partition of the whole trajectory.
         {
           Eigen::Vector3d pos = traj.evaluateDeBoorT(t);
           Eigen::Vector3d pos_next = traj.evaluateDeBoorT(std::min(t + t_step, tmp));
-          flag_occ = grid_map_->getInflateOccupancy(pos, estimateSegmentYaw(pos, pos_next));
+          const int occupancy = grid_map_->getInflateOccupancy(
+              pos, estimateSegmentDirection(pos, pos_next));
+          if (occupancy == 0)
+          {
+            occupied_prefix_active = false;
+            flag_occ = false;
+            continue;
+          }
+
+          const double recovery_distance =
+              (pos.head<2>() - recovery_origin.head<2>()).norm();
+          if (occupancy > 0 && occupied_prefix_active &&
+              recovery_distance <= occupied_start_recovery_radius_)
+          {
+            flag_occ = false;
+            continue;
+          }
+
+          flag_occ = true;
           if (flag_occ)
           {
             //cout << "hit_obs, t=" << t << " P=" << traj.evaluateDeBoorT(t).transpose() << endl;
@@ -1113,11 +1146,27 @@ namespace scan_planner
       double tm, tmp;
       traj.getTimeSpan(tm, tmp);
       double t_step = (tmp - tm) / ((traj.evaluateDeBoorT(tmp) - traj.evaluateDeBoorT(tm)).norm() / grid_map_->getResolution()); // Step size is defined as the maximum size that can passes through every grid.
+      const Eigen::Vector3d recovery_origin = traj.evaluateDeBoorT(tm);
+      bool occupied_prefix_active = occupied_start_recovery_enabled_;
       for (double t = tm; t < tmp * 2 / 3; t += t_step)
       {
         Eigen::Vector3d pos = traj.evaluateDeBoorT(t);
         Eigen::Vector3d pos_next = traj.evaluateDeBoorT(std::min(t + t_step, tmp));
-        if (grid_map_->getInflateOccupancy(pos, estimateSegmentYaw(pos, pos_next)))
+        const int occupancy = grid_map_->getInflateOccupancy(
+            pos, estimateSegmentDirection(pos, pos_next));
+        if (occupancy == 0)
+        {
+          occupied_prefix_active = false;
+          continue;
+        }
+
+        const double recovery_distance =
+            (pos.head<2>() - recovery_origin.head<2>()).norm();
+        if (occupancy > 0 && occupied_prefix_active &&
+            recovery_distance <= occupied_start_recovery_radius_)
+          continue;
+
+        if (occupancy != 0)
         {
           // cout << "Refined traj hit_obs, t=" << t << " P=" << traj.evaluateDeBoorT(t).transpose() << endl;
 

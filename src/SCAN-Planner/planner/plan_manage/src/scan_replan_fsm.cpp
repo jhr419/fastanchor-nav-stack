@@ -45,6 +45,14 @@ namespace scan_planner
     self_inflation_z_down_ = load_parameter<double>(node_, "grid_map.obstacles_inflation_z_down", 0.0);
     self_double_cylinder_radius_ = load_parameter<double>(node_, "grid_map.double_cylinder_radius", 0.0);
     self_double_cylinder_offset_ = load_parameter<double>(node_, "grid_map.double_cylinder_offset", 0.0);
+    self_double_cylinder_slope_aware_ =
+        load_parameter<bool>(node_, "grid_map.double_cylinder_slope_aware", false);
+    self_double_cylinder_max_slope_ = std::max(
+        0.0, load_parameter<double>(node_, "grid_map.double_cylinder_max_slope", 1.0));
+    occupied_start_recovery_enabled_ =
+        load_parameter<bool>(node_, "astar.occupied_start_recovery_enabled", false);
+    occupied_start_recovery_radius_ = std::max(
+        0.0, load_parameter<double>(node_, "astar.occupied_start_recovery_radius", 0.6));
     body_height_ = load_parameter<double>(node_, "grid_map.body_height", 0.4);
     self_inflation_frame_id_ = load_parameter<std::string>(node_, "grid_map.frame_id", "world");
 
@@ -324,7 +332,8 @@ namespace scan_planner
     const int sample_num = std::max(1, static_cast<int>(std::ceil(duration / sample_dt)));
     const Eigen::Vector3d final_pt = global_data.global_traj_.evaluate(duration);
     const Eigen::Vector3d final_prev = global_data.global_traj_.evaluate(duration * (sample_num - 1) / sample_num);
-    const int final_occ = map->getInflateOccupancy(final_pt, estimateYawFromSegment(final_prev, final_pt));
+    const int final_occ = map->getInflateOccupancy(
+        final_pt, estimatePathDirection(final_prev, final_pt));
     if (final_occ <= 0)
       return true;
 
@@ -335,7 +344,7 @@ namespace scan_planner
       const Eigen::Vector3d pt = global_data.global_traj_.evaluate(t);
       const Eigen::Vector3d prev_pt = global_data.global_traj_.evaluate(prev_t);
 
-      if (map->getInflateOccupancy(pt, estimateYawFromSegment(prev_pt, pt)) == 0)
+      if (map->getInflateOccupancy(pt, estimatePathDirection(prev_pt, pt)) == 0)
       {
         const Eigen::Vector3d raw_end = end_pt_;
         end_pt_ = pt;
@@ -553,12 +562,15 @@ namespace scan_planner
     return std::atan2(heading(1), heading(0));
   }
 
-  double SCANReplanFSM::estimateYawFromSegment(const Eigen::Vector3d &from, const Eigen::Vector3d &to) const
+  Eigen::Vector3d SCANReplanFSM::estimatePathDirection(const Eigen::Vector3d &from,
+                                                       const Eigen::Vector3d &to) const
   {
-    Eigen::Vector2d diff(to(0) - from(0), to(1) - from(1));
-    if (diff.squaredNorm() < 1e-8)
-      return getOdomYaw();
-    return std::atan2(diff(1), diff(0));
+    const Eigen::Vector3d direction = to - from;
+    if (direction.head<2>().squaredNorm() >= 1e-8)
+      return direction;
+
+    const double yaw = getOdomYaw();
+    return Eigen::Vector3d(std::cos(yaw), std::sin(yaw), 0.0);
   }
 
   void SCANReplanFSM::publishSelfInflationMarker()
@@ -587,7 +599,17 @@ namespace scan_planner
     Eigen::Vector3d center = odom_pos_;
     center(2) += 0.5 * (z_up - z_down);
 
-    Eigen::Vector3d heading(std::cos(getOdomYaw()), std::sin(getOdomYaw()), 0.0);
+    const double yaw = getOdomYaw();
+    double slope = 0.0;
+    if (self_double_cylinder_slope_aware_)
+    {
+      const Eigen::Vector3d body_heading = odom_orient_.toRotationMatrix().col(0);
+      const double horizontal_length = body_heading.head<2>().norm();
+      if (horizontal_length > 1e-6)
+        slope = std::clamp(body_heading.z() / horizontal_length,
+                           -self_double_cylinder_max_slope_, self_double_cylinder_max_slope_);
+    }
+    Eigen::Vector3d heading(std::cos(yaw), std::sin(yaw), slope);
     Eigen::Vector3d front = center + self_double_cylinder_offset_ * heading;
     Eigen::Vector3d rear = center - self_double_cylinder_offset_ * heading;
 
@@ -926,8 +948,41 @@ namespace scan_planner
 
     /* ---------- check trajectory ---------- */
     constexpr double time_step = 0.01;
-    double t_cur = (node_->now() - info->start_time_).seconds();
+    const double t_cur = std::clamp(
+        (node_->now() - info->start_time_).seconds(), 0.0, info->duration_);
     double t_2_3 = info->duration_ * 2 / 3;
+    const Eigen::Vector3d current_pos = info->position_traj_.evaluateDeBoorT(t_cur);
+    const Eigen::Vector3d current_next =
+        info->position_traj_.evaluateDeBoorT(std::min(t_cur + time_step, info->duration_));
+    const int current_occupancy = map->getInflateOccupancy(
+        current_pos, estimatePathDirection(current_pos, current_next));
+
+    if (current_occupancy == 0)
+    {
+      occupied_start_recovery_active_ = false;
+      occupied_start_recovery_exhausted_ = false;
+    }
+    else if (occupied_start_recovery_active_)
+    {
+      const double distance_from_origin =
+          (current_pos.head<2>() - occupied_start_recovery_origin_.head<2>()).norm();
+      if (distance_from_origin > occupied_start_recovery_radius_)
+      {
+        occupied_start_recovery_active_ = false;
+        occupied_start_recovery_exhausted_ = true;
+      }
+    }
+    else if (occupied_start_recovery_enabled_ && !occupied_start_recovery_exhausted_ &&
+             current_occupancy > 0)
+    {
+      occupied_start_recovery_active_ = true;
+      occupied_start_recovery_origin_ = current_pos;
+      RCLCPP_WARN(node_->get_logger(),
+                  "Current trajectory starts occupied; suppressing only its occupied prefix for %.2f m",
+                  occupied_start_recovery_radius_);
+    }
+
+    bool occupied_prefix_active = occupied_start_recovery_active_;
     for (double t = t_cur; t < info->duration_; t += time_step)
     {
       if (t_cur < t_2_3 && t >= t_2_3) // If t_cur < t_2_3, only the first 2/3 partition of the trajectory is considered valid and will get checked.
@@ -935,7 +990,21 @@ namespace scan_planner
 
       Eigen::Vector3d pos = info->position_traj_.evaluateDeBoorT(t);
       Eigen::Vector3d pos_next = info->position_traj_.evaluateDeBoorT(std::min(t + time_step, info->duration_));
-      if (map->getInflateOccupancy(pos, estimateYawFromSegment(pos, pos_next)))
+      const int occupancy = map->getInflateOccupancy(
+          pos, estimatePathDirection(pos, pos_next));
+      if (occupancy == 0)
+      {
+        occupied_prefix_active = false;
+        continue;
+      }
+
+      const double recovery_distance =
+          (pos.head<2>() - occupied_start_recovery_origin_.head<2>()).norm();
+      if (occupancy > 0 && occupied_prefix_active &&
+          recovery_distance <= occupied_start_recovery_radius_)
+        continue;
+
+      if (occupancy != 0)
       {
         if (planFromCurrentTraj()) // Make a chance
         {
@@ -1087,7 +1156,8 @@ namespace scan_planner
     }
 
     auto targetOccupancy = [&](const Eigen::Vector3d &pt) {
-      return planner_manager_->grid_map_->getInflateOccupancy(pt, estimateYawFromSegment(odom_pos_, pt));
+      return planner_manager_->grid_map_->getInflateOccupancy(
+          pt, estimatePathDirection(odom_pos_, pt));
     };
 
     if (targetOccupancy(local_target_pt_) != 0)

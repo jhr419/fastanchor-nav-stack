@@ -42,6 +42,12 @@ void AStar::initGridMap(GridMap::Ptr occ_map, const Eigen::Vector3i pool_size, r
             node_->declare_parameter<double>("astar.search_plane_z_offset", 0.0);
         if (!node_->has_parameter("astar.visualize_search_plane"))
             node_->declare_parameter<bool>("astar.visualize_search_plane", false);
+        if (!node_->has_parameter("astar.occupied_start_recovery_enabled"))
+            node_->declare_parameter<bool>("astar.occupied_start_recovery_enabled", false);
+        if (!node_->has_parameter("astar.occupied_start_recovery_radius"))
+            node_->declare_parameter<double>("astar.occupied_start_recovery_radius", 0.6);
+        if (!node_->has_parameter("astar.occupied_start_penalty"))
+            node_->declare_parameter<double>("astar.occupied_start_penalty", 5.0);
 
         node_->get_parameter("grid_map.frame_id", search_plane_frame_id_);
         const auto marker_qos = rclcpp::QoS(2).reliable().transient_local();
@@ -62,7 +68,12 @@ void AStar::updateSearchPlaneParameters()
 
     node_->get_parameter("astar.search_plane_z_offset", search_plane_z_offset_);
     node_->get_parameter("astar.visualize_search_plane", visualize_search_plane_);
+    node_->get_parameter("astar.occupied_start_recovery_enabled", occupied_start_recovery_enabled_);
+    node_->get_parameter("astar.occupied_start_recovery_radius", occupied_start_recovery_radius_);
+    node_->get_parameter("astar.occupied_start_penalty", occupied_start_penalty_);
     node_->get_parameter("grid_map.frame_id", search_plane_frame_id_);
+    occupied_start_recovery_radius_ = std::max(0.0, occupied_start_recovery_radius_);
+    occupied_start_penalty_ = std::max(1.0, occupied_start_penalty_);
 }
 
 void AStar::clearSearchPlaneVisualization()
@@ -211,14 +222,13 @@ bool AStar::ConvertToIndexAndAdjustStartEndPoints(Vector3d start_pt, Vector3d en
     if (!Coord2Index(start_pt, start_idx) || !Coord2Index(end_pt, end_idx))
         return false;
 
-    Eigen::Vector3d start_to_end = end_pt - start_pt;
-    if (start_to_end.norm() < 1e-6)
+    const Eigen::Vector3d path_direction = end_pt - start_pt;
+    if (path_direction.norm() < 1e-6)
         return false;
-    const double path_yaw = std::atan2(start_to_end(1), start_to_end(0));
-    start_to_end.normalize();
+    Eigen::Vector3d start_to_end = path_direction.normalized();
 
-    int occ = checkOccupancy(Index2Coord(start_idx), path_yaw);
-    if (occ)
+    int occ = checkOccupancy(Index2Coord(start_idx), path_direction);
+    if (occ && !occupied_start_recovery_enabled_)
     {
         //ROS_WARN("Start point is insdide an obstacle.");
         do
@@ -227,7 +237,7 @@ bool AStar::ConvertToIndexAndAdjustStartEndPoints(Vector3d start_pt, Vector3d en
             if (!Coord2Index(start_pt, start_idx))
                 return false;
 
-            occ = checkOccupancy(Index2Coord(start_idx), path_yaw);
+            occ = checkOccupancy(Index2Coord(start_idx), path_direction);
             if (occ == -1)
             {
                 RCLCPP_WARN(rclcpp::get_logger("path_searching"), "[Astar] Start point outside the map region.");
@@ -236,7 +246,7 @@ bool AStar::ConvertToIndexAndAdjustStartEndPoints(Vector3d start_pt, Vector3d en
         } while (occ);
     }
 
-    occ = checkOccupancy(Index2Coord(end_idx), path_yaw);
+    occ = checkOccupancy(Index2Coord(end_idx), path_direction);
     if (occ)
     {
         //ROS_WARN("End point is insdide an obstacle.");
@@ -246,7 +256,7 @@ bool AStar::ConvertToIndexAndAdjustStartEndPoints(Vector3d start_pt, Vector3d en
             if (!Coord2Index(end_pt, end_idx))
                 return false;
 
-            occ = checkOccupancy(Index2Coord(end_idx), path_yaw);
+            occ = checkOccupancy(Index2Coord(end_idx), path_direction);
             if (occ == -1)
             {
                 RCLCPP_WARN(rclcpp::get_logger("path_searching"), "[Astar] End point outside the map region.");
@@ -310,6 +320,26 @@ ASTAR_RET AStar::AstarSearch(const double step_size, Vector3d start_pt, Vector3d
         RCLCPP_ERROR(rclcpp::get_logger("path_searching"),
                      "A-star search plane offset %.3f moves an endpoint outside the search pool",
                      search_plane_z_offset_);
+        return ASTAR_RET::INIT_ERR;
+    }
+
+    const Eigen::Vector3d recovery_origin = Index2Coord(start_idx);
+    const Eigen::Vector3d initial_direction = Index2Coord(end_idx) - recovery_origin;
+    const int initial_occupancy = checkOccupancy(recovery_origin, initial_direction);
+    if (initial_occupancy < 0)
+        return ASTAR_RET::INIT_ERR;
+    const bool occupied_start_recovery_active =
+        occupied_start_recovery_enabled_ && initial_occupancy > 0;
+    if (occupied_start_recovery_active)
+    {
+        RCLCPP_WARN(rclcpp::get_logger("path_searching"),
+                    "[Astar] Start is occupied; allowing a penalized escape for at most %.2f m",
+                    occupied_start_recovery_radius_);
+    }
+    else if (initial_occupancy > 0)
+    {
+        RCLCPP_ERROR(rclcpp::get_logger("path_searching"),
+                     "[Astar] Start remains occupied after endpoint adjustment");
         return ASTAR_RET::INIT_ERR;
     }
 
@@ -386,14 +416,27 @@ ASTAR_RET AStar::AstarSearch(const double step_size, Vector3d start_pt, Vector3d
 
                 neighborPtr->rounds = rounds_;
 
-                const double neighbor_yaw = std::atan2(static_cast<double>(dy), static_cast<double>(dx));
-                if (checkOccupancy(Index2Coord(neighborPtr->index), neighbor_yaw))
+                const Eigen::Vector3d current_pos = Index2Coord(current->index);
+                const Eigen::Vector3d neighbor_pos = Index2Coord(neighborPtr->index);
+                const Eigen::Vector3d move_direction = neighbor_pos - current_pos;
+                const int neighbor_occupancy = checkOccupancy(neighbor_pos, move_direction);
+                bool occupied_escape_step = false;
+                if (neighbor_occupancy != 0)
                 {
-                    continue;
+                    const int current_occupancy = checkOccupancy(current_pos, move_direction);
+                    const double recovery_distance =
+                        (neighbor_pos.head<2>() - recovery_origin.head<2>()).norm();
+                    occupied_escape_step = occupied_start_recovery_active &&
+                                           current_occupancy > 0 &&
+                                           recovery_distance <= occupied_start_recovery_radius_;
+                    if (!occupied_escape_step)
+                        continue;
                 }
 
                 const int dz = neighborIdx(2) - current->index(2);
                 double static_cost = sqrt(dx * dx + dy * dy + dz * dz);
+                if (occupied_escape_step)
+                    static_cost *= occupied_start_penalty_;
                 tentative_gScore = current->gScore + static_cost;
 
                 if (!flag_explored)

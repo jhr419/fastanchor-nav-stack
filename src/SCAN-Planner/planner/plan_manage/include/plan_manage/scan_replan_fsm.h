@@ -61,6 +61,13 @@ namespace scan_planner
     double rviz_goal_height_;
     double self_inflation_z_up_, self_inflation_z_down_;
     double self_double_cylinder_radius_, self_double_cylinder_offset_;
+    double self_double_cylinder_max_slope_;
+    bool self_double_cylinder_slope_aware_;
+    bool occupied_start_recovery_enabled_;
+    bool occupied_start_recovery_active_{false};
+    bool occupied_start_recovery_exhausted_{false};
+    double occupied_start_recovery_radius_;
+    Eigen::Vector3d occupied_start_recovery_origin_{Eigen::Vector3d::Zero()};
     double body_height_;
     std::string self_inflation_frame_id_;
 
@@ -120,7 +127,8 @@ namespace scan_planner
     void finishProcess();
     void publishSelfInflationMarker();
     double getOdomYaw() const;
-    double estimateYawFromSegment(const Eigen::Vector3d &from, const Eigen::Vector3d &to) const;
+    Eigen::Vector3d estimatePathDirection(const Eigen::Vector3d &from,
+                                          const Eigen::Vector3d &to) const;
     void updateLocalTrajTimeFreeze();
 
     /* ROS functions */

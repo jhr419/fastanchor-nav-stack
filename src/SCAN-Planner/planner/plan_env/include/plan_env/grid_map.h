@@ -71,6 +71,8 @@ struct MappingParameters {
   double resolution_, resolution_inv_;
   double obstacles_inflation_z_up, obstacles_inflation_z_down;
   double double_cylinder_radius_, double_cylinder_offset_;
+  double double_cylinder_max_slope_;
+  bool vertical_inflation_from_robot_extent_, double_cylinder_slope_aware_;
   bool map_sliding_en_;
   double map_sliding_thresh_;
   int map_sliding_thresh_vox_;
@@ -179,7 +181,8 @@ public:
   inline void setOccupied(Eigen::Vector3d pos);
   inline int getOccupancy(Eigen::Vector3d pos);
   inline int getOccupancy(Eigen::Vector3i id);
-  inline int getInflateOccupancy(Eigen::Vector3d pos, double yaw);
+  inline int getInflateOccupancy(Eigen::Vector3d pos, double yaw, double slope = 0.0);
+  inline int getInflateOccupancy(Eigen::Vector3d pos, const Eigen::Vector3d& path_direction);
 
   inline void boundIndex(Eigen::Vector3i& id);
   inline bool isUnknown(const Eigen::Vector3i& id);
@@ -474,8 +477,12 @@ inline int GridMap::getOccupancy(Eigen::Vector3d pos) {
   return md_.occupancy_buffer_[toAddress(id)] > mp_.min_occupancy_log_ ? 1 : 0;
 }
 
-inline int GridMap::getInflateOccupancy(Eigen::Vector3d pos, double yaw) {
-  Eigen::Vector3d heading(std::cos(yaw), std::sin(yaw), 0.0);
+inline int GridMap::getInflateOccupancy(Eigen::Vector3d pos, double yaw, double slope) {
+  if (!mp_.double_cylinder_slope_aware_)
+    slope = 0.0;
+  slope = std::clamp(slope, -mp_.double_cylinder_max_slope_, mp_.double_cylinder_max_slope_);
+
+  Eigen::Vector3d heading(std::cos(yaw), std::sin(yaw), slope);
   Eigen::Vector3d front = pos + mp_.double_cylinder_offset_ * heading;
   Eigen::Vector3d rear = pos - mp_.double_cylinder_offset_ * heading;
 
@@ -483,6 +490,16 @@ inline int GridMap::getInflateOccupancy(Eigen::Vector3d pos, double yaw) {
   if (front_occ != 0) return front_occ;
 
   return getInflateOccupancyFromBuffer(rear, md_.occupancy_buffer_inflate_);
+}
+
+inline int GridMap::getInflateOccupancy(Eigen::Vector3d pos, const Eigen::Vector3d& path_direction) {
+  const double horizontal_length = path_direction.head<2>().norm();
+  if (horizontal_length < 1e-6)
+    return getInflateOccupancy(pos, 0.0, 0.0);
+
+  const double yaw = std::atan2(path_direction.y(), path_direction.x());
+  const double slope = path_direction.z() / horizontal_length;
+  return getInflateOccupancy(pos, yaw, slope);
 }
 
 inline int GridMap::getInflateOccupancyFromBuffer(Eigen::Vector3d pos, const std::vector<char>& buffer) {
