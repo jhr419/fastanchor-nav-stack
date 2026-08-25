@@ -3,7 +3,7 @@
 navigation_system:
   launch_arguments:
     # Shared map and coordinate frames
-    map_pcd_path: /home/hy/ros_ws/fastanchor-nav-stack/maps/map_preprocessed2.pcd
+    map_pcd_path: ../../../maps/map_preprocessed2.pcd
     use_sim_time: false
     map_frame: map
     odom_frame: odom

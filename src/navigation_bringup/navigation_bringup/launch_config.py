@@ -7,7 +7,7 @@ import yaml
 
 
 def load_navigation_system_defaults(config_path: str) -> Dict[str, str]:
-    path = Path(config_path)
+    path = Path(config_path).resolve()
     with path.open("r", encoding="utf-8") as stream:
         document = yaml.safe_load(stream)
 
@@ -23,7 +23,24 @@ def load_navigation_system_defaults(config_path: str) -> Dict[str, str]:
             f"navigation_system.launch_arguments in {path} must be a mapping"
         )
 
-    return {name: _to_launch_string(name, value) for name, value in values.items()}
+    defaults = {name: _to_launch_string(name, value) for name, value in values.items()}
+    if "map_pcd_path" in defaults:
+        defaults["map_pcd_path"] = _resolve_config_path(
+            path, defaults["map_pcd_path"]
+        )
+    return defaults
+
+
+def _resolve_config_path(config_path: Path, configured_path: str) -> str:
+    path = Path(configured_path).expanduser()
+    if not path.is_absolute():
+        path = config_path.parent / path
+    path = path.resolve()
+    if not path.is_file():
+        raise RuntimeError(
+            f"map_pcd_path does not point to a file after resolution: {path}"
+        )
+    return str(path)
 
 
 def _to_launch_string(name: str, value: Any) -> str:
