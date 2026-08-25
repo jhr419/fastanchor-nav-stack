@@ -1,0 +1,67 @@
+# Defaults for navigation_system.launch.py. Every value remains overridable from
+# the command line, for example: lidar_model:=mid360.
+navigation_system:
+  launch_arguments:
+    # Shared map and coordinate frames
+    map_pcd_path: /home/hy/ros_ws/fastanchor-nav-stack/maps/map_preprocessed2.pcd
+    use_sim_time: false
+    map_frame: map
+    odom_frame: odom
+    base_frame: base_link
+
+    # Localization frontend and interfaces
+    lio_backend: fastlio2
+    lidar_model: mid360
+    fastlio_config_file: mid360_localization.yaml
+    fastlio_lidar_topic: /livox/lidar
+    fastlio_imu_topic: /livox/imu
+    fastlio_lidar_type: 1
+    fastlio_localization_mode: false
+    localization_pose_topic: /fast_anchor/odom
+    localization_cloud_topic: /fast_anchor/aligned_cloud
+    initial_pose_topic: /initialpose
+    aligned_cloud_interval_s: 0.0
+    aligned_cloud_publish_rate_hz: 25.0
+    path_publish_interval_s: 0.5
+    # base_link 坐标系下的自机点云过滤盒
+    self_filter_enabled: true
+    self_filter_min_x: -0.25
+    self_filter_max_x: 0.35
+    self_filter_min_y: -0.15
+    self_filter_max_y: 0.15
+    self_filter_min_z: -0.10
+    self_filter_max_z: 0.30
+
+    # Global and local planning interfaces
+    goal_topic: /move_base_simple/goal
+    global_path_topic: /planned_path
+    scan_initial_path_topic: /scan_planner/initial_path
+    cmd_vel_topic: /cmd_vel
+    controller_mode: closed_loop
+    path_cropper_update_rate: 20.0
+    path_window_robot_aligned: false
+    local_target_distance: 4.0
+    grid_visualization_rate_hz: 5.0
+
+    # Runtime diagnostics
+    runtime_log_enabled: true
+    runtime_log_report_interval_sec: 5.0
+    runtime_log_map_target_rate_hz: 10.0
+    runtime_log_csv_path: ""
+
+    # Optional waypoint mission; empty keeps interactive single-goal mode
+    waypoints_file: ""
+    waypoint_status_topic: /waypoint_mission/status
+    waypoint_xy_tolerance: 0.5
+    waypoint_z_tolerance: -1.0
+    waypoint_path_goal_tolerance: 0.75
+    waypoint_hold_time: 0.5
+    waypoint_loop: false
+
+    # Process and visualization switches
+    start_localization: true
+    start_livox_driver: true
+    start_fastlio: true
+    start_localization_rviz: false
+    start_global_planner_rviz: false
+    start_local_planner_rviz: false

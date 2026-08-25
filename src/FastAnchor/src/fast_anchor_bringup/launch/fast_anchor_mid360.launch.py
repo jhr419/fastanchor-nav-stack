@@ -75,6 +75,13 @@ def generate_launch_description():
     aligned_cloud_interval_s = LaunchConfiguration("aligned_cloud_interval_s")
     aligned_cloud_publish_rate_hz = LaunchConfiguration("aligned_cloud_publish_rate_hz")
     path_publish_interval_s = LaunchConfiguration("path_publish_interval_s")
+    self_filter_enabled = LaunchConfiguration("self_filter_enabled")
+    self_filter_min_x = LaunchConfiguration("self_filter_min_x")
+    self_filter_max_x = LaunchConfiguration("self_filter_max_x")
+    self_filter_min_y = LaunchConfiguration("self_filter_min_y")
+    self_filter_max_y = LaunchConfiguration("self_filter_max_y")
+    self_filter_min_z = LaunchConfiguration("self_filter_min_z")
+    self_filter_max_z = LaunchConfiguration("self_filter_max_z")
 
     default_config = PathJoinSubstitution([
         FindPackageShare("fast_anchor_bringup"),
@@ -132,6 +139,13 @@ def generate_launch_description():
             default_value="0.5",
             description="Minimum full localization-path publication period",
         ),
+        DeclareLaunchArgument("self_filter_enabled", default_value="true"),
+        DeclareLaunchArgument("self_filter_min_x", default_value="-0.25"),
+        DeclareLaunchArgument("self_filter_max_x", default_value="0.35"),
+        DeclareLaunchArgument("self_filter_min_y", default_value="-0.15"),
+        DeclareLaunchArgument("self_filter_max_y", default_value="0.15"),
+        DeclareLaunchArgument("self_filter_min_z", default_value="-0.10"),
+        DeclareLaunchArgument("self_filter_max_z", default_value="0.30"),
         DeclareLaunchArgument("start_livox_driver", default_value="true"),
         DeclareLaunchArgument(
             "lidar_model",
@@ -264,6 +278,27 @@ def generate_launch_description():
                     ),
                     "output.path_publish_interval_s": ParameterValue(
                         path_publish_interval_s, value_type=float
+                    ),
+                    "cloud_preprocess.self_filter.enabled": ParameterValue(
+                        self_filter_enabled, value_type=bool
+                    ),
+                    "cloud_preprocess.self_filter.min_x": ParameterValue(
+                        self_filter_min_x, value_type=float
+                    ),
+                    "cloud_preprocess.self_filter.max_x": ParameterValue(
+                        self_filter_max_x, value_type=float
+                    ),
+                    "cloud_preprocess.self_filter.min_y": ParameterValue(
+                        self_filter_min_y, value_type=float
+                    ),
+                    "cloud_preprocess.self_filter.max_y": ParameterValue(
+                        self_filter_max_y, value_type=float
+                    ),
+                    "cloud_preprocess.self_filter.min_z": ParameterValue(
+                        self_filter_min_z, value_type=float
+                    ),
+                    "cloud_preprocess.self_filter.max_z": ParameterValue(
+                        self_filter_max_z, value_type=float
                     ),
                 },
             ],

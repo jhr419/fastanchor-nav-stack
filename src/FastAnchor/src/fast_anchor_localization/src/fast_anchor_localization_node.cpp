@@ -227,6 +227,27 @@ public:
       declare_parameter<bool>("cloud_preprocess.enable_height_filter", source_non_ground_filter_en_);
     source_non_ground_min_z_ =
       declare_parameter<double>("cloud_preprocess.min_z", source_non_ground_min_z_);
+    self_filter_enabled_ =
+      declare_parameter<bool>("cloud_preprocess.self_filter.enabled", false);
+    self_filter_min_x_ =
+      declare_parameter<double>("cloud_preprocess.self_filter.min_x", -0.25);
+    self_filter_max_x_ =
+      declare_parameter<double>("cloud_preprocess.self_filter.max_x", 0.35);
+    self_filter_min_y_ =
+      declare_parameter<double>("cloud_preprocess.self_filter.min_y", -0.15);
+    self_filter_max_y_ =
+      declare_parameter<double>("cloud_preprocess.self_filter.max_y", 0.15);
+    self_filter_min_z_ =
+      declare_parameter<double>("cloud_preprocess.self_filter.min_z", -0.10);
+    self_filter_max_z_ =
+      declare_parameter<double>("cloud_preprocess.self_filter.max_z", 0.30);
+
+    if (self_filter_min_x_ > self_filter_max_x_ ||
+      self_filter_min_y_ > self_filter_max_y_ ||
+      self_filter_min_z_ > self_filter_max_z_)
+    {
+      throw std::runtime_error("cloud_preprocess.self_filter min bounds must not exceed max bounds");
+    }
 
     max_iterations_ = declare_parameter<int>("icp.max_iterations", max_iterations_);
     max_correspondence_distance_ =
@@ -261,6 +282,14 @@ public:
     base_to_body_ = makeTransform(base_to_body_xyz, base_to_body_rpy);
     body_to_base_ = base_to_body_.inverse();
     initial_map_to_base_ = makeTransform(initial_pose_xyz, initial_pose_rpy);
+
+    RCLCPP_INFO(
+      get_logger(),
+      "Base self filter %s: x=[%.3f, %.3f] y=[%.3f, %.3f] z=[%.3f, %.3f] m",
+      self_filter_enabled_ ? "enabled" : "disabled",
+      self_filter_min_x_, self_filter_max_x_,
+      self_filter_min_y_, self_filter_max_y_,
+      self_filter_min_z_, self_filter_max_z_);
 
     // 如果icp_map_pcd_path_和visualization_map_pcd_path_没有单独设置，就使用map_pcd_path_。这样用户只需要提供一个地图文件即可满足ICP和可视化的需求。
     if (icp_map_pcd_path_.empty()) {
@@ -848,6 +877,14 @@ private:
 
       const Eigen::Vector3d base_xyz =
         body_to_base_ * Eigen::Vector3d(p_body.x, p_body.y, p_body.z);
+      // 点已经转换到 base_link，使用机体包围盒剔除机器人自身回波。
+      if (self_filter_enabled_ &&
+        base_xyz.x() >= self_filter_min_x_ && base_xyz.x() <= self_filter_max_x_ &&
+        base_xyz.y() >= self_filter_min_y_ && base_xyz.y() <= self_filter_max_y_ &&
+        base_xyz.z() >= self_filter_min_z_ && base_xyz.z() <= self_filter_max_z_)
+      {
+        continue;
+      }
       if (source_non_ground_filter_en_ && base_xyz.z() < source_non_ground_min_z_) {
         continue;
       }
@@ -1080,6 +1117,13 @@ private:
   int min_scan_points_ = 120;
   double source_non_ground_min_z_ = -0.2;
   bool source_non_ground_filter_en_ = true;
+  bool self_filter_enabled_ = false;
+  double self_filter_min_x_ = -0.25;
+  double self_filter_max_x_ = 0.35;
+  double self_filter_min_y_ = -0.15;
+  double self_filter_max_y_ = 0.15;
+  double self_filter_min_z_ = -0.10;
+  double self_filter_max_z_ = 0.30;
   double max_correspondence_distance_ = 1.5;
   double transformation_epsilon_ = 0.01;
   double euclidean_fitness_epsilon_ = 0.01;

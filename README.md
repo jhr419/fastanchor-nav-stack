@@ -16,12 +16,16 @@ source install/setup.bash
 
 ## Start
 
-Pass the same PCD map to FastAnchor and FastPlanner:
+The integrated launch reads its defaults from
+`src/navigation_bringup/config/navigation_system.yaml`, including the shared
+PCD map used by FastAnchor and FastPlanner:
 
 ```bash
-ros2 launch navigation_bringup navigation_system.launch.py \
-  map_pcd_path:=$PWD/maps/map_preprocessed2.pcd
+ros2 launch navigation_bringup navigation_system.launch.py
 ```
+
+Edit that YAML for persistent robot configuration. Launch arguments remain
+available for one-off overrides.
 
 The integrated launch is headless by default on this performance branch: all
 three RViz processes are disabled so onboard visualization cannot consume the

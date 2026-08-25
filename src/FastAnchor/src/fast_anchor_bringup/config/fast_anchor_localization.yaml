@@ -45,6 +45,14 @@ fast_anchor_localization_node:
       enable_height_filter: true
       min_z: -0.2
       max_z: 3.0
+      self_filter:
+        enabled: true
+        min_x: -0.25
+        max_x: 0.35
+        min_y: -0.15
+        max_y: 0.15
+        min_z: -0.10
+        max_z: 0.30
 
     map:
       pcd_path: "maps/map_preprocessed.pcd"

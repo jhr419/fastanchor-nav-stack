@@ -1,5 +1,6 @@
 """Minimal FastAnchor -> FastPlanner -> SCAN-Planner navigation bringup."""
 
+from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.conditions import IfCondition
@@ -9,8 +10,19 @@ from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 
+from navigation_bringup.launch_config import load_navigation_system_defaults
+
 
 def generate_launch_description():
+    config_path = (
+        f"{get_package_share_directory('navigation_bringup')}"
+        "/config/navigation_system.yaml"
+    )
+    configured_defaults = load_navigation_system_defaults(config_path)
+
+    def configured(name, fallback):
+        return configured_defaults.get(name, str(fallback))
+
     use_sim_time = LaunchConfiguration("use_sim_time")
     map_pcd_path = LaunchConfiguration("map_pcd_path")
     map_frame = LaunchConfiguration("map_frame")
@@ -21,6 +33,13 @@ def generate_launch_description():
     aligned_cloud_interval_s = LaunchConfiguration("aligned_cloud_interval_s")
     aligned_cloud_publish_rate_hz = LaunchConfiguration("aligned_cloud_publish_rate_hz")
     path_publish_interval_s = LaunchConfiguration("path_publish_interval_s")
+    self_filter_enabled = LaunchConfiguration("self_filter_enabled")
+    self_filter_min_x = LaunchConfiguration("self_filter_min_x")
+    self_filter_max_x = LaunchConfiguration("self_filter_max_x")
+    self_filter_min_y = LaunchConfiguration("self_filter_min_y")
+    self_filter_max_y = LaunchConfiguration("self_filter_max_y")
+    self_filter_min_z = LaunchConfiguration("self_filter_min_z")
+    self_filter_max_z = LaunchConfiguration("self_filter_max_z")
     initial_pose_topic = LaunchConfiguration("initial_pose_topic")
     goal_topic = LaunchConfiguration("goal_topic")
     global_path_topic = LaunchConfiguration("global_path_topic")
@@ -35,6 +54,12 @@ def generate_launch_description():
     runtime_log_csv_path = LaunchConfiguration("runtime_log_csv_path")
     cmd_vel_topic = LaunchConfiguration("cmd_vel_topic")
     waypoints_file = LaunchConfiguration("waypoints_file")
+    lio_backend = LaunchConfiguration("lio_backend")
+    fastlio_config_file = LaunchConfiguration("fastlio_config_file")
+    fastlio_lidar_topic = LaunchConfiguration("fastlio_lidar_topic")
+    fastlio_imu_topic = LaunchConfiguration("fastlio_imu_topic")
+    fastlio_lidar_type = LaunchConfiguration("fastlio_lidar_type")
+    fastlio_localization_mode = LaunchConfiguration("fastlio_localization_mode")
 
     fast_anchor_launch = PathJoinSubstitution([
         FindPackageShare("fast_anchor_bringup"),
@@ -65,46 +90,94 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument(
             "scan_initial_path_topic",
-            default_value="/scan_planner/initial_path",
+            default_value=configured(
+                "scan_initial_path_topic", "/scan_planner/initial_path"
+            ),
             description="Cropped global path passed to SCAN-Planner",
         ),
-        DeclareLaunchArgument("map_pcd_path", description="PCD map used by localization and global planning"),
-        DeclareLaunchArgument("use_sim_time", default_value="false"),
-        DeclareLaunchArgument("map_frame", default_value="map"),
-        DeclareLaunchArgument("odom_frame", default_value="odom"),
-        DeclareLaunchArgument("base_frame", default_value="base_link"),
-        DeclareLaunchArgument("localization_pose_topic", default_value="/fast_anchor/odom"),
-        DeclareLaunchArgument("localization_cloud_topic", default_value="/fast_anchor/aligned_cloud"),
+        DeclareLaunchArgument(
+            "map_pcd_path",
+            default_value=configured("map_pcd_path", ""),
+            description="PCD map used by localization and global planning",
+        ),
+        DeclareLaunchArgument(
+            "use_sim_time", default_value=configured("use_sim_time", "false")
+        ),
+        DeclareLaunchArgument("map_frame", default_value=configured("map_frame", "map")),
+        DeclareLaunchArgument(
+            "odom_frame", default_value=configured("odom_frame", "odom")
+        ),
+        DeclareLaunchArgument(
+            "base_frame", default_value=configured("base_frame", "base_link")
+        ),
+        DeclareLaunchArgument(
+            "localization_pose_topic",
+            default_value=configured("localization_pose_topic", "/fast_anchor/odom"),
+        ),
+        DeclareLaunchArgument(
+            "localization_cloud_topic",
+            default_value=configured(
+                "localization_cloud_topic", "/fast_anchor/aligned_cloud"
+            ),
+        ),
         DeclareLaunchArgument(
             "aligned_cloud_interval_s",
-            default_value="0.0",
+            default_value=configured("aligned_cloud_interval_s", "0.0"),
             description="FastAnchor aligned-cloud period; 0 restores sensor-rate output",
         ),
         DeclareLaunchArgument(
             "aligned_cloud_publish_rate_hz",
-            default_value="25.0",
+            default_value=configured("aligned_cloud_publish_rate_hz", "25.0"),
             description="Fixed FastAnchor aligned-cloud output rate; 0 disables cached repeats",
         ),
         DeclareLaunchArgument(
             "path_publish_interval_s",
-            default_value="0.5",
+            default_value=configured("path_publish_interval_s", "0.5"),
             description="FastAnchor full-path publication period",
         ),
-        DeclareLaunchArgument("initial_pose_topic", default_value="/initialpose"),
-        DeclareLaunchArgument("goal_topic", default_value="/move_base_simple/goal"),
+        DeclareLaunchArgument(
+            "self_filter_enabled",
+            default_value=configured("self_filter_enabled", "true"),
+        ),
+        DeclareLaunchArgument(
+            "self_filter_min_x", default_value=configured("self_filter_min_x", "-0.25")
+        ),
+        DeclareLaunchArgument(
+            "self_filter_max_x", default_value=configured("self_filter_max_x", "0.35")
+        ),
+        DeclareLaunchArgument(
+            "self_filter_min_y", default_value=configured("self_filter_min_y", "-0.15")
+        ),
+        DeclareLaunchArgument(
+            "self_filter_max_y", default_value=configured("self_filter_max_y", "0.15")
+        ),
+        DeclareLaunchArgument(
+            "self_filter_min_z", default_value=configured("self_filter_min_z", "-0.10")
+        ),
+        DeclareLaunchArgument(
+            "self_filter_max_z", default_value=configured("self_filter_max_z", "0.30")
+        ),
+        DeclareLaunchArgument(
+            "initial_pose_topic",
+            default_value=configured("initial_pose_topic", "/initialpose"),
+        ),
+        DeclareLaunchArgument(
+            "goal_topic",
+            default_value=configured("goal_topic", "/move_base_simple/goal"),
+        ),
         DeclareLaunchArgument(
             "global_path_topic",
-            default_value="/planned_path",
+            default_value=configured("global_path_topic", "/planned_path"),
             description="Stable full global path published by the global planner",
         ),
         DeclareLaunchArgument(
             "path_cropper_update_rate",
-            default_value="20.0",
+            default_value=configured("path_cropper_update_rate", "20.0"),
             description="Global-path window cropper update rate in Hz",
         ),
         DeclareLaunchArgument(
             "path_window_robot_aligned",
-            default_value="false",
+            default_value=configured("path_window_robot_aligned", "false"),
             description=(
                 "Whether the crop window rotates with robot yaw; must match the "
                 "SCAN-Planner sliding-window definition"
@@ -112,84 +185,137 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             "local_target_distance",
-            default_value="4.0",
+            default_value=configured("local_target_distance", "4.0"),
             description="Distance from the robot to the SCAN local target in metres",
         ),
         DeclareLaunchArgument(
             "grid_visualization_rate_hz",
-            default_value="5.0",
+            default_value=configured("grid_visualization_rate_hz", "5.0"),
             description="SCAN occupancy visualization rate; 0 disables it on headless platforms",
         ),
         DeclareLaunchArgument(
             "runtime_log_enabled",
-            default_value="true",
+            default_value=configured("runtime_log_enabled", "true"),
             description="Log local-map timing, bottlenecks, CPU, and memory usage",
         ),
-        DeclareLaunchArgument("runtime_log_report_interval_sec", default_value="5.0"),
+        DeclareLaunchArgument(
+            "runtime_log_report_interval_sec",
+            default_value=configured("runtime_log_report_interval_sec", "5.0"),
+        ),
         DeclareLaunchArgument(
             "runtime_log_map_target_rate_hz",
-            default_value="10.0",
+            default_value=configured("runtime_log_map_target_rate_hz", "10.0"),
             description="Required unique local obstacle-map fusion rate",
         ),
         DeclareLaunchArgument(
             "runtime_log_csv_path",
-            default_value="",
+            default_value=configured("runtime_log_csv_path", ""),
             description="Optional append-only runtime metrics CSV path",
         ),
-        DeclareLaunchArgument("cmd_vel_topic", default_value="/cmd_vel"),
+        DeclareLaunchArgument(
+            "cmd_vel_topic", default_value=configured("cmd_vel_topic", "/cmd_vel")
+        ),
         DeclareLaunchArgument(
             "waypoints_file",
-            default_value="",
+            default_value=configured("waypoints_file", ""),
             description=(
                 "ROS 2 parameter YAML for waypoint_mission_manager; an empty value keeps "
                 "the normal single-goal mode"
             ),
         ),
-        DeclareLaunchArgument("waypoint_status_topic", default_value="/waypoint_mission/status"),
+        DeclareLaunchArgument(
+            "waypoint_status_topic",
+            default_value=configured(
+                "waypoint_status_topic", "/waypoint_mission/status"
+            ),
+        ),
         DeclareLaunchArgument(
             "waypoint_xy_tolerance",
-            default_value="0.5",
+            default_value=configured("waypoint_xy_tolerance", "0.5"),
             description="XY arrival tolerance for advancing to the next waypoint",
         ),
         DeclareLaunchArgument(
             "waypoint_z_tolerance",
-            default_value="-1.0",
+            default_value=configured("waypoint_z_tolerance", "-1.0"),
             description="Z arrival tolerance; a negative value disables the Z check",
         ),
         DeclareLaunchArgument(
             "waypoint_path_goal_tolerance",
-            default_value="0.75",
+            default_value=configured("waypoint_path_goal_tolerance", "0.75"),
             description="Maximum XY difference between a planned path endpoint and its waypoint",
         ),
         DeclareLaunchArgument(
             "waypoint_hold_time",
-            default_value="0.5",
+            default_value=configured("waypoint_hold_time", "0.5"),
             description="Time that odometry must remain inside the arrival tolerance",
         ),
         DeclareLaunchArgument(
             "waypoint_loop",
-            default_value="false",
+            default_value=configured("waypoint_loop", "false"),
             description="Restart from the first waypoint after completing the mission",
         ),
-        DeclareLaunchArgument("controller_mode", default_value="closed_loop"),
+        DeclareLaunchArgument(
+            "controller_mode",
+            default_value=configured("controller_mode", "closed_loop"),
+        ),
+        DeclareLaunchArgument(
+            "lio_backend",
+            default_value=configured("lio_backend", "fastlio2"),
+            choices=["fastlio2"],
+            description="LIO frontend used by the integrated system",
+        ),
         DeclareLaunchArgument(
             "lidar_model",
-            default_value="mid360s",
+            default_value=configured("lidar_model", "mid360s"),
             choices=["mid360", "mid360s"],
             description="Livox LiDAR model: mid360 or mid360s",
         ),
-        DeclareLaunchArgument("start_localization", default_value="true"),
-        DeclareLaunchArgument("start_livox_driver", default_value="true"),
-        DeclareLaunchArgument("start_fastlio", default_value="true"),
+        DeclareLaunchArgument(
+            "fastlio_config_file",
+            default_value=configured(
+                "fastlio_config_file", "mid360_localization.yaml"
+            ),
+        ),
+        DeclareLaunchArgument(
+            "fastlio_lidar_topic",
+            default_value=configured("fastlio_lidar_topic", "/livox/lidar"),
+        ),
+        DeclareLaunchArgument(
+            "fastlio_imu_topic",
+            default_value=configured("fastlio_imu_topic", "/livox/imu"),
+        ),
+        DeclareLaunchArgument(
+            "fastlio_lidar_type",
+            default_value=configured("fastlio_lidar_type", "1"),
+        ),
+        DeclareLaunchArgument(
+            "fastlio_localization_mode",
+            default_value=configured("fastlio_localization_mode", "false"),
+        ),
+        DeclareLaunchArgument(
+            "start_localization",
+            default_value=configured("start_localization", "true"),
+        ),
+        DeclareLaunchArgument(
+            "start_livox_driver",
+            default_value=configured("start_livox_driver", "true"),
+        ),
+        DeclareLaunchArgument(
+            "start_fastlio",
+            default_value=configured("start_fastlio", "true"),
+        ),
         DeclareLaunchArgument(
             "start_localization_rviz",
-            default_value="false",
+            default_value=configured("start_localization_rviz", "false"),
             description="Start localization RViz (disabled by default for onboard CPU savings)",
         ),
-        DeclareLaunchArgument("start_global_planner_rviz", default_value="false"),
+        DeclareLaunchArgument(
+            "start_global_planner_rviz",
+            default_value=configured("start_global_planner_rviz", "false"),
+        ),
         DeclareLaunchArgument(
             "start_local_planner_rviz",
-            default_value="false",
+            default_value=configured("start_local_planner_rviz", "false"),
             description="Start SCAN RViz (disabled by default for onboard CPU savings)",
         ),
         IncludeLaunchDescription(
@@ -209,7 +335,20 @@ def generate_launch_description():
                 "aligned_cloud_interval_s": aligned_cloud_interval_s,
                 "aligned_cloud_publish_rate_hz": aligned_cloud_publish_rate_hz,
                 "path_publish_interval_s": path_publish_interval_s,
+                "self_filter_enabled": self_filter_enabled,
+                "self_filter_min_x": self_filter_min_x,
+                "self_filter_max_x": self_filter_max_x,
+                "self_filter_min_y": self_filter_min_y,
+                "self_filter_max_y": self_filter_max_y,
+                "self_filter_min_z": self_filter_min_z,
+                "self_filter_max_z": self_filter_max_z,
+                "lio_backend": lio_backend,
                 "lidar_model": LaunchConfiguration("lidar_model"),
+                "fastlio_config_file": fastlio_config_file,
+                "fastlio_lidar_topic": fastlio_lidar_topic,
+                "fastlio_imu_topic": fastlio_imu_topic,
+                "fastlio_lidar_type": fastlio_lidar_type,
+                "fastlio_localization_mode": fastlio_localization_mode,
                 "start_livox_driver": LaunchConfiguration("start_livox_driver"),
                 "start_fastlio": LaunchConfiguration("start_fastlio"),
                 "start_fastlio_rviz": "false",

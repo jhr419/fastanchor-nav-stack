@@ -4,7 +4,7 @@ general:
 
 lidar_type: 1 # Livox = 1, Ouster = 2, Velodyne = 3
 
-high_frequency_odom: true # 是否将位姿输出的频率调高到于 imu 近似同频
+high_frequency_odom: false # 是否将位姿输出的频率调高到于 imu 近似同频
 lidar_frequency: 10 # 如果启用 high_frequency_odom ，请一定设置好激光雷达的频率
 
 offset:
