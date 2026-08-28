@@ -69,6 +69,8 @@ def generate_launch_description():
     map_frame = LaunchConfiguration("map_frame")
     odom_frame = LaunchConfiguration("odom_frame")
     base_frame = LaunchConfiguration("base_frame")
+    localization_odom_topic = LaunchConfiguration("localization_odom_topic")
+    lio_sync_tolerance_s = LaunchConfiguration("lio_sync_tolerance_s")
     initial_pose_topic = LaunchConfiguration("initial_pose_topic")
     output_odom_topic = LaunchConfiguration("output_odom_topic")
     aligned_cloud_topic = LaunchConfiguration("aligned_cloud_topic")
@@ -121,6 +123,8 @@ def generate_launch_description():
         DeclareLaunchArgument("map_frame", default_value="map"),
         DeclareLaunchArgument("odom_frame", default_value="camera_init"),
         DeclareLaunchArgument("base_frame", default_value="base_link"),
+        DeclareLaunchArgument("localization_odom_topic", default_value="/Odometry"),
+        DeclareLaunchArgument("lio_sync_tolerance_s", default_value="0.001"),
         DeclareLaunchArgument("initial_pose_topic", default_value="/initialpose"),
         DeclareLaunchArgument("output_odom_topic", default_value="/fast_anchor/odom"),
         DeclareLaunchArgument("aligned_cloud_topic", default_value="/fast_anchor/aligned_cloud"),
@@ -264,6 +268,11 @@ def generate_launch_description():
                     "frames.map_frame": map_frame,
                     "frames.odom_frame": odom_frame,
                     "frames.base_frame": base_frame,
+                    "odom_topic": localization_odom_topic,
+                    "topics.fast_lio_odom": localization_odom_topic,
+                    "lio_sync.tolerance_s": ParameterValue(
+                        lio_sync_tolerance_s, value_type=float
+                    ),
                     "initialpose_topic": initial_pose_topic,
                     "odom_output_topic": output_odom_topic,
                     "aligned_cloud_topic": aligned_cloud_topic,

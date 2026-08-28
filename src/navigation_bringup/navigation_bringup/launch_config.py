@@ -31,6 +31,24 @@ def load_navigation_system_defaults(config_path: str) -> Dict[str, str]:
     return defaults
 
 
+def load_node_parameters(config_path: str, node_name: str) -> Dict[str, Any]:
+    path = Path(config_path).resolve()
+    with path.open("r", encoding="utf-8") as stream:
+        document = yaml.safe_load(stream)
+
+    try:
+        parameters = document[node_name]["ros__parameters"]
+    except (KeyError, TypeError) as exc:
+        raise RuntimeError(
+            f"{path} must contain {node_name}.ros__parameters"
+        ) from exc
+    if not isinstance(parameters, dict):
+        raise RuntimeError(
+            f"{node_name}.ros__parameters in {path} must be a mapping"
+        )
+    return parameters
+
+
 def _resolve_config_path(config_path: Path, configured_path: str) -> str:
     path = Path(configured_path).expanduser()
     if not path.is_absolute():

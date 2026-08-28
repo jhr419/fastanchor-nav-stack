@@ -3,7 +3,10 @@ from pathlib import Path
 import pytest
 import yaml
 
-from navigation_bringup.launch_config import load_navigation_system_defaults
+from navigation_bringup.launch_config import (
+    load_navigation_system_defaults,
+    load_node_parameters,
+)
 
 
 def write_config(path: Path, map_path: str) -> None:
@@ -42,3 +45,25 @@ def test_rejects_missing_map(tmp_path: Path) -> None:
 
     with pytest.raises(RuntimeError, match="map_pcd_path does not point to a file"):
         load_navigation_system_defaults(str(config_path))
+
+
+def test_loads_node_parameters_from_combined_config(tmp_path: Path) -> None:
+    config_path = tmp_path / "navigation_system.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "fast_anchor_ekf": {
+                    "ros__parameters": {
+                        "frequency": 50.0,
+                        "odom0_config": [True, False],
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    parameters = load_node_parameters(str(config_path), "fast_anchor_ekf")
+
+    assert parameters["frequency"] == 50.0
+    assert parameters["odom0_config"] == [True, False]

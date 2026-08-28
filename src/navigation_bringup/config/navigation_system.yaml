@@ -1,15 +1,15 @@
-# Defaults for navigation_system.launch.py. Every value remains overridable from
-# the command line, for example: lidar_model:=mid360.
+# navigation_system.launch.py 的默认参数。
+# 所有参数仍可通过命令行覆盖，例如：lidar_model:=mid360。
 navigation_system:
   launch_arguments:
-    # Shared map and coordinate frames
+    # 公共地图与坐标系
     map_pcd_path: ../../../maps/map_preprocessed2.pcd
     use_sim_time: false
     map_frame: map
-    odom_frame: odom
+    odom_frame: camera_init
     base_frame: base_link
 
-    # Localization frontend and interfaces
+    # 定位前端与接口
     lio_backend: fastlio2
     lidar_model: mid360
     fastlio_config_file: mid360_localization.yaml
@@ -17,6 +17,17 @@ navigation_system:
     fastlio_imu_topic: /livox/imu
     fastlio_lidar_type: 1
     fastlio_localization_mode: false
+    # 足式里程计融合；设为 none 可恢复 FAST-LIO2 直接输入链路
+    odometry_fusion_mode: leg
+    enable_unitree_sportmode_adapter: true
+    unitree_sportmode_topic: /lf/sportmodestate
+    leg_odom_topic: /leg_odom
+    raw_fast_lio_odom_topic: /Odometry
+    fast_lio_base_odom_topic: /fast_anchor/fusion/fast_lio_base_odom
+    filtered_base_odom_topic: /fast_anchor/fusion/filtered_base_odom
+    fused_body_odom_topic: /fast_anchor/fusion/fused_body_odom
+    direct_lio_sync_tolerance_s: 0.001
+    fusion_lio_sync_tolerance_s: 0.05
     localization_pose_topic: /fast_anchor/odom
     localization_cloud_topic: /fast_anchor/aligned_cloud
     initial_pose_topic: /initialpose
@@ -32,7 +43,7 @@ navigation_system:
     self_filter_min_z: -0.10
     self_filter_max_z: 0.30
 
-    # Global and local planning interfaces
+    # 全局与局部规划接口
     goal_topic: /move_base_simple/goal
     global_path_topic: /planned_path
     scan_initial_path_topic: /scan_planner/initial_path
@@ -43,13 +54,13 @@ navigation_system:
     local_target_distance: 4.0
     grid_visualization_rate_hz: 5.0
 
-    # Runtime diagnostics
+    # 运行时诊断
     runtime_log_enabled: true
     runtime_log_report_interval_sec: 5.0
     runtime_log_map_target_rate_hz: 10.0
     runtime_log_csv_path: ""
 
-    # Optional waypoint mission; empty keeps interactive single-goal mode
+    # 可选航点任务；留空时保持交互式单目标模式
     waypoints_file: ""
     waypoint_status_topic: /waypoint_mission/status
     waypoint_xy_tolerance: 0.5
@@ -58,10 +69,98 @@ navigation_system:
     waypoint_hold_time: 0.5
     waypoint_loop: false
 
-    # Process and visualization switches
+    # 进程与可视化开关
     start_localization: true
     start_livox_driver: true
     start_fastlio: true
     start_localization_rviz: false
     start_global_planner_rviz: false
     start_local_planner_rviz: false
+
+# 将 Go2 高层状态转换为标准里程计；EKF 只使用其中的机体系速度
+unitree_sportmode_to_odom:
+  ros__parameters:
+    input_topic: /lf/sportmodestate
+    output_topic: /leg_odom
+    odom_frame: unitree_odom
+    base_frame: base_link
+    velocity_in_world_frame: true
+    drop_on_error: false
+    pose_covariance_diagonal: [0.04, 0.04, 0.09, 0.03, 0.03, 0.05]
+    twist_covariance_diagonal: [0.04, 0.04, 0.09, 0.04, 0.04, 0.05]
+
+# FAST-LIO2 输出的是 body 位姿，EKF 内部统一使用 base_link 位姿
+fast_anchor_odom_frame_adapter:
+  ros__parameters:
+    frames:
+      body: body
+      base: base_link
+    topics:
+      raw_fast_lio_odom: /Odometry
+      fast_lio_base_odom: /fast_anchor/fusion/fast_lio_base_odom
+      filtered_base_odom: /fast_anchor/fusion/filtered_base_odom
+      fused_body_odom: /fast_anchor/fusion/fused_body_odom
+    # T_base_body，必须与 FastAnchor 定位外参保持一致
+    base_to_body_xyz: [-0.3, 0.0, -0.2]
+    base_to_body_rpy: [0.0, 0.0, 0.0]
+
+# FAST-LIO2 提供绝对 6DoF 位姿，Go2 提供 base_link 下的三轴线速度
+fast_anchor_ekf:
+  ros__parameters:
+    frequency: 50.0
+    sensor_timeout: 0.2
+    two_d_mode: false
+    transform_time_offset: 0.0
+    transform_timeout: 0.05
+    print_diagnostics: true
+    publish_acceleration: false
+    publish_tf: false
+    reset_on_time_jump: true
+
+    map_frame: map
+    odom_frame: camera_init
+    world_frame: camera_init
+    base_link_frame: base_link
+
+    odom0: /fast_anchor/fusion/fast_lio_base_odom
+    odom0_config: [true, true, true,
+                   true, true, true,
+                   false, false, false,
+                   false, false, false,
+                   false, false, false]
+    odom0_queue_size: 20
+    odom0_nodelay: false
+    odom0_differential: false
+    odom0_relative: false
+    odom0_pose_use_child_frame: false
+
+    odom1: /leg_odom
+    odom1_config: [false, false, false,
+                   false, false, false,
+                   true, true, true,
+                   false, false, false,
+                   false, false, false]
+    odom1_queue_size: 20
+    odom1_nodelay: false
+    odom1_differential: false
+    odom1_relative: false
+    use_control: false
+
+    # 状态顺序：x、y、z、roll、pitch、yaw、vx、vy、vz、
+    # vroll、vpitch、vyaw、ax、ay、az。数值沿用已验证融合仓库。
+    process_noise_covariance: [
+      0.03, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+      0.0,  0.03, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+      0.0,  0.0,  0.04, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+      0.0,  0.0,  0.0,  0.02, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+      0.0,  0.0,  0.0,  0.0,  0.02, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+      0.0,  0.0,  0.0,  0.0,  0.0,  0.03, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+      0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.08, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+      0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.08, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+      0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.10, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+      0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.04, 0.0,  0.0,  0.0,  0.0,  0.0,
+      0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.04, 0.0,  0.0,  0.0,  0.0,
+      0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.05, 0.0,  0.0,  0.0,
+      0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.08, 0.0,  0.0,
+      0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.08, 0.0,
+      0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.10]

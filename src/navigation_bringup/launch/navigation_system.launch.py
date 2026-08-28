@@ -2,7 +2,7 @@
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression
@@ -10,7 +10,107 @@ from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 
-from navigation_bringup.launch_config import load_navigation_system_defaults
+from navigation_bringup.launch_config import (
+    load_navigation_system_defaults,
+    load_node_parameters,
+)
+
+
+LEG_ODOM_CONFIG = [
+    False, False, False,
+    False, False, False,
+    True, True, True,
+    False, False, False,
+    False, False, False,
+]
+
+
+def _is_true(value):
+    return value.strip().lower() in ("true", "1", "yes", "on")
+
+
+def _launch_odometry_fusion(context, fusion_parameters):
+    mode = LaunchConfiguration("odometry_fusion_mode").perform(context).strip().lower()
+    if mode not in ("none", "leg"):
+        raise RuntimeError(
+            "odometry_fusion_mode must be one of: none, leg "
+            f"(got '{mode}')"
+        )
+    if mode == "none":
+        return []
+
+    use_sim_time = LaunchConfiguration("use_sim_time")
+    map_frame = LaunchConfiguration("map_frame")
+    odom_frame = LaunchConfiguration("odom_frame")
+    base_frame = LaunchConfiguration("base_frame")
+    raw_fast_lio_odom_topic = LaunchConfiguration("raw_fast_lio_odom_topic")
+    fast_lio_base_odom_topic = LaunchConfiguration("fast_lio_base_odom_topic")
+    filtered_base_odom_topic = LaunchConfiguration("filtered_base_odom_topic")
+    fused_body_odom_topic = LaunchConfiguration("fused_body_odom_topic")
+    leg_odom_topic = LaunchConfiguration("leg_odom_topic")
+
+    actions = []
+    if _is_true(
+        LaunchConfiguration("enable_unitree_sportmode_adapter").perform(context)
+    ):
+        actions.append(
+            Node(
+                package="fast_anchor_fusion",
+                executable="unitree_sportmode_to_odom.py",
+                name="unitree_sportmode_to_odom",
+                output="screen",
+                parameters=[
+                    fusion_parameters["unitree_sportmode_to_odom"],
+                    {
+                        "use_sim_time": use_sim_time,
+                        "input_topic": LaunchConfiguration("unitree_sportmode_topic"),
+                        "output_topic": leg_odom_topic,
+                        "base_frame": base_frame,
+                    },
+                ],
+            )
+        )
+
+    actions.extend([
+        Node(
+            package="fast_anchor_fusion",
+            executable="odom_frame_adapter_node",
+            name="fast_anchor_odom_frame_adapter",
+            output="screen",
+            parameters=[
+                fusion_parameters["fast_anchor_odom_frame_adapter"],
+                {
+                    "use_sim_time": use_sim_time,
+                    "frames.base": base_frame,
+                    "topics.raw_fast_lio_odom": raw_fast_lio_odom_topic,
+                    "topics.fast_lio_base_odom": fast_lio_base_odom_topic,
+                    "topics.filtered_base_odom": filtered_base_odom_topic,
+                    "topics.fused_body_odom": fused_body_odom_topic,
+                },
+            ],
+        ),
+        Node(
+            package="robot_localization",
+            executable="ekf_node",
+            name="fast_anchor_ekf",
+            output="screen",
+            parameters=[
+                fusion_parameters["fast_anchor_ekf"],
+                {
+                    "use_sim_time": use_sim_time,
+                    "map_frame": map_frame,
+                    "odom_frame": odom_frame,
+                    "world_frame": odom_frame,
+                    "base_link_frame": base_frame,
+                    "odom0": fast_lio_base_odom_topic,
+                    "odom1": leg_odom_topic,
+                    "odom1_config": LEG_ODOM_CONFIG,
+                },
+            ],
+            remappings=[("odometry/filtered", filtered_base_odom_topic)],
+        ),
+    ])
+    return actions
 
 
 def generate_launch_description():
@@ -19,6 +119,14 @@ def generate_launch_description():
         "/config/navigation_system.yaml"
     )
     configured_defaults = load_navigation_system_defaults(config_path)
+    fusion_parameters = {
+        node_name: load_node_parameters(config_path, node_name)
+        for node_name in (
+            "unitree_sportmode_to_odom",
+            "fast_anchor_odom_frame_adapter",
+            "fast_anchor_ekf",
+        )
+    }
 
     def configured(name, fallback):
         return configured_defaults.get(name, str(fallback))
@@ -60,6 +168,18 @@ def generate_launch_description():
     fastlio_imu_topic = LaunchConfiguration("fastlio_imu_topic")
     fastlio_lidar_type = LaunchConfiguration("fastlio_lidar_type")
     fastlio_localization_mode = LaunchConfiguration("fastlio_localization_mode")
+    odometry_fusion_mode = LaunchConfiguration("odometry_fusion_mode")
+    raw_fast_lio_odom_topic = LaunchConfiguration("raw_fast_lio_odom_topic")
+    fused_body_odom_topic = LaunchConfiguration("fused_body_odom_topic")
+    localization_odom_topic = PythonExpression([
+        "'", raw_fast_lio_odom_topic, "' if '", odometry_fusion_mode,
+        "' == 'none' else '", fused_body_odom_topic, "'",
+    ])
+    lio_sync_tolerance_s = PythonExpression([
+        LaunchConfiguration("direct_lio_sync_tolerance_s"),
+        " if '", odometry_fusion_mode, "' == 'none' else ",
+        LaunchConfiguration("fusion_lio_sync_tolerance_s"),
+    ])
 
     fast_anchor_launch = PathJoinSubstitution([
         FindPackageShare("fast_anchor_bringup"),
@@ -105,7 +225,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument("map_frame", default_value=configured("map_frame", "map")),
         DeclareLaunchArgument(
-            "odom_frame", default_value=configured("odom_frame", "odom")
+            "odom_frame", default_value=configured("odom_frame", "camera_init")
         ),
         DeclareLaunchArgument(
             "base_frame", default_value=configured("base_frame", "base_link")
@@ -293,6 +413,56 @@ def generate_launch_description():
             default_value=configured("fastlio_localization_mode", "false"),
         ),
         DeclareLaunchArgument(
+            "odometry_fusion_mode",
+            default_value=configured("odometry_fusion_mode", "leg"),
+            choices=["none", "leg"],
+        ),
+        DeclareLaunchArgument(
+            "enable_unitree_sportmode_adapter",
+            default_value=configured("enable_unitree_sportmode_adapter", "true"),
+        ),
+        DeclareLaunchArgument(
+            "unitree_sportmode_topic",
+            default_value=configured("unitree_sportmode_topic", "/lf/sportmodestate"),
+        ),
+        DeclareLaunchArgument(
+            "leg_odom_topic",
+            default_value=configured("leg_odom_topic", "/leg_odom"),
+        ),
+        DeclareLaunchArgument(
+            "raw_fast_lio_odom_topic",
+            default_value=configured("raw_fast_lio_odom_topic", "/Odometry"),
+        ),
+        DeclareLaunchArgument(
+            "fast_lio_base_odom_topic",
+            default_value=configured(
+                "fast_lio_base_odom_topic",
+                "/fast_anchor/fusion/fast_lio_base_odom",
+            ),
+        ),
+        DeclareLaunchArgument(
+            "filtered_base_odom_topic",
+            default_value=configured(
+                "filtered_base_odom_topic",
+                "/fast_anchor/fusion/filtered_base_odom",
+            ),
+        ),
+        DeclareLaunchArgument(
+            "fused_body_odom_topic",
+            default_value=configured(
+                "fused_body_odom_topic",
+                "/fast_anchor/fusion/fused_body_odom",
+            ),
+        ),
+        DeclareLaunchArgument(
+            "direct_lio_sync_tolerance_s",
+            default_value=configured("direct_lio_sync_tolerance_s", "0.001"),
+        ),
+        DeclareLaunchArgument(
+            "fusion_lio_sync_tolerance_s",
+            default_value=configured("fusion_lio_sync_tolerance_s", "0.05"),
+        ),
+        DeclareLaunchArgument(
             "start_localization",
             default_value=configured("start_localization", "true"),
         ),
@@ -318,6 +488,10 @@ def generate_launch_description():
             default_value=configured("start_local_planner_rviz", "false"),
             description="Start SCAN RViz (disabled by default for onboard CPU savings)",
         ),
+        OpaqueFunction(
+            function=_launch_odometry_fusion,
+            kwargs={"fusion_parameters": fusion_parameters},
+        ),
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(fast_anchor_launch),
             condition=IfCondition(LaunchConfiguration("start_localization")),
@@ -329,6 +503,8 @@ def generate_launch_description():
                 "map_frame": map_frame,
                 "odom_frame": odom_frame,
                 "base_frame": base_frame,
+                "localization_odom_topic": localization_odom_topic,
+                "lio_sync_tolerance_s": lio_sync_tolerance_s,
                 "initial_pose_topic": initial_pose_topic,
                 "output_odom_topic": localization_pose_topic,
                 "aligned_cloud_topic": localization_cloud_topic,
