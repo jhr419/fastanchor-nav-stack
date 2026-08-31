@@ -62,6 +62,7 @@ def generate_launch_description():
     fastlio_imu_topic = LaunchConfiguration("fastlio_imu_topic")
     fastlio_lidar_type = LaunchConfiguration("fastlio_lidar_type")
     fastlio_localization_mode = LaunchConfiguration("fastlio_localization_mode")
+    fastlio_publish_tf = LaunchConfiguration("fastlio_publish_tf")
     yifanlio_config_path = LaunchConfiguration("yifanlio_config_path")
     yifanlio_publish_tf = LaunchConfiguration("yifanlio_publish_tf")
     yifanlio_adapter_config = LaunchConfiguration("yifanlio_adapter_config")
@@ -172,6 +173,7 @@ def generate_launch_description():
         DeclareLaunchArgument("fastlio_lidar_topic", default_value="/livox/lidar"),
         DeclareLaunchArgument("fastlio_imu_topic", default_value="/livox/imu"),
         DeclareLaunchArgument("fastlio_lidar_type", default_value="1"),
+        DeclareLaunchArgument("fastlio_publish_tf", default_value="true"),
         # The bundled FAST-LIO odom-only branch skips LiDAR map matching and
         # quickly drifts under pure IMU integration. Keep normal scan matching
         # enabled; map publication and PCD saving remain disabled by YAML.
@@ -213,6 +215,7 @@ def generate_launch_description():
                         "imu_topic": fastlio_imu_topic,
                         "lidar_type": fastlio_lidar_type,
                         "localization_mode": fastlio_localization_mode,
+                        "publish_tf": fastlio_publish_tf,
                     }.items(),
                 ),
             ],

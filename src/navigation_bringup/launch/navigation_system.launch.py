@@ -168,6 +168,7 @@ def generate_launch_description():
     fastlio_imu_topic = LaunchConfiguration("fastlio_imu_topic")
     fastlio_lidar_type = LaunchConfiguration("fastlio_lidar_type")
     fastlio_localization_mode = LaunchConfiguration("fastlio_localization_mode")
+    fastlio_publish_tf = LaunchConfiguration("fastlio_publish_tf")
     odometry_fusion_mode = LaunchConfiguration("odometry_fusion_mode")
     raw_fast_lio_odom_topic = LaunchConfiguration("raw_fast_lio_odom_topic")
     fused_body_odom_topic = LaunchConfiguration("fused_body_odom_topic")
@@ -463,6 +464,12 @@ def generate_launch_description():
             default_value=configured("fusion_lio_sync_tolerance_s", "0.05"),
         ),
         DeclareLaunchArgument(
+            "fastlio_publish_tf",
+            default_value=PythonExpression([
+                "'true' if '", odometry_fusion_mode, "' == 'none' else 'false'",
+            ]),
+        ),
+        DeclareLaunchArgument(
             "start_localization",
             default_value=configured("start_localization", "true"),
         ),
@@ -525,6 +532,7 @@ def generate_launch_description():
                 "fastlio_imu_topic": fastlio_imu_topic,
                 "fastlio_lidar_type": fastlio_lidar_type,
                 "fastlio_localization_mode": fastlio_localization_mode,
+                "fastlio_publish_tf": fastlio_publish_tf,
                 "start_livox_driver": LaunchConfiguration("start_livox_driver"),
                 "start_fastlio": LaunchConfiguration("start_fastlio"),
                 "start_fastlio_rviz": "false",

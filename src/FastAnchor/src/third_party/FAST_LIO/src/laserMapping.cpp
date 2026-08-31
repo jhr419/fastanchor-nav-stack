@@ -143,6 +143,7 @@ double T1[MAXN], s_plot[MAXN], s_plot2[MAXN], s_plot3[MAXN], s_plot4[MAXN], s_pl
 double match_time = 0, solve_time = 0, solve_const_H_time = 0;
 int    kdtree_size_st = 0, kdtree_size_end = 0, add_point_size = 0, kdtree_delete_counter = 0;
 bool   runtime_pos_log = false, pcd_save_en = false, time_sync_en = false, extrinsic_est_en = true, path_en = true;
+bool   publish_tf_en = true;
 /**************************/
 
 float res_last[100000] = {0.0};
@@ -961,7 +962,8 @@ void publish_odometry(const rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPt
     odomAftMapped.child_frame_id = "body";
     odomAftMapped.header.stamp = get_ros_time(lidar_end_time);
     set_posestamp(odomAftMapped.pose);
-    pubOdomAftMapped->publish(odomAftMapped);
+
+    // 先写入协方差再发布，避免下游 EKF 读到上一帧或全 0 的可信度。
     auto P = kf.get_P();
     for (int i = 0; i < 6; i ++)
     {
@@ -972,6 +974,21 @@ void publish_odometry(const rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPt
         odomAftMapped.pose.covariance[i*6 + 3] = P(k, 0);
         odomAftMapped.pose.covariance[i*6 + 4] = P(k, 1);
         odomAftMapped.pose.covariance[i*6 + 5] = P(k, 2);
+    }
+    for (int i = 0; i < 6; i ++)
+    {
+        const int index = i * 6 + i;
+        if (!std::isfinite(odomAftMapped.pose.covariance[index]) ||
+            odomAftMapped.pose.covariance[index] < 1.0e-6)
+        {
+            odomAftMapped.pose.covariance[index] = 1.0e-6;
+        }
+    }
+    pubOdomAftMapped->publish(odomAftMapped);
+
+    if (!publish_tf_en)
+    {
+        return;
     }
 
     geometry_msgs::msg::TransformStamped trans;
@@ -1134,6 +1151,7 @@ public:
         this->declare_parameter<bool>("publish.scan_publish_en", true);
         this->declare_parameter<bool>("publish.dense_publish_en", true);
         this->declare_parameter<bool>("publish.scan_bodyframe_pub_en", true);
+        this->declare_parameter<bool>("publish.tf_en", true);
         this->declare_parameter<int>("max_iteration", 4);
         this->declare_parameter<string>("map_file_path", "");
         this->declare_parameter<string>("common.lid_topic", "/livox/lidar");
@@ -1185,6 +1203,7 @@ public:
         this->get_parameter_or<bool>("publish.scan_publish_en", scan_pub_en, true);
         this->get_parameter_or<bool>("publish.dense_publish_en", dense_pub_en, true);
         this->get_parameter_or<bool>("publish.scan_bodyframe_pub_en", scan_body_pub_en, true);
+        this->get_parameter_or<bool>("publish.tf_en", publish_tf_en, true);
         this->get_parameter_or<int>("max_iteration", NUM_MAX_ITERATIONS, 4);
         this->get_parameter_or<string>("map_file_path", map_file_path, "");
         this->get_parameter_or<string>("common.lid_topic", lid_topic, "/livox/lidar");

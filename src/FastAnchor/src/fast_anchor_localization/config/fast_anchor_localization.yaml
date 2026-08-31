@@ -32,7 +32,7 @@ fast_anchor_localization_node:
     initial_pose_xyz: [5.93438, 5.90442, 0.0]
     initial_pose_rpy: [0.0, 0.0, 0.0]
 
-    min_range: 0.1
+    min_range: 0.5
     max_range: 60.0
     scan_leaf_size: 0.25
     map_leaf_size: 0.25

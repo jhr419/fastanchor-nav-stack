@@ -85,7 +85,8 @@ unitree_sportmode_to_odom:
     odom_frame: unitree_odom
     base_frame: base_link
     velocity_in_world_frame: true
-    drop_on_error: false
+    use_message_stamp: false
+    drop_on_error: true
     pose_covariance_diagonal: [0.04, 0.04, 0.09, 0.03, 0.03, 0.05]
     twist_covariance_diagonal: [0.04, 0.04, 0.09, 0.04, 0.04, 0.05]
 
@@ -103,6 +104,18 @@ fast_anchor_odom_frame_adapter:
     # T_base_body，必须与 FastAnchor 定位外参保持一致
     base_to_body_xyz: [-0.3, 0.0, -0.2]
     base_to_body_rpy: [0.0, 0.0, 0.0]
+    health_check:
+      enabled: true
+      drop_unhealthy: false
+      max_translation_step_m: 0.5
+      max_rotation_step_rad: 0.6
+      max_linear_speed_mps: 2.5
+      max_angular_speed_radps: 3.0
+      min_pose_covariance: 0.02
+      min_twist_covariance: 0.05
+      unhealthy_pose_covariance: 1000.0
+      unhealthy_twist_covariance: 1000.0
+      min_dt_for_speed_check_s: 0.02
 
 # FAST-LIO2 提供绝对 6DoF 位姿，Go2 提供 base_link 下的三轴线速度
 fast_anchor_ekf:
@@ -133,6 +146,7 @@ fast_anchor_ekf:
     odom0_differential: false
     odom0_relative: false
     odom0_pose_use_child_frame: false
+    odom0_pose_rejection_threshold: 5.0
 
     odom1: /leg_odom
     odom1_config: [false, false, false,
@@ -144,6 +158,7 @@ fast_anchor_ekf:
     odom1_nodelay: false
     odom1_differential: false
     odom1_relative: false
+    odom1_twist_rejection_threshold: 5.0
     use_control: false
 
     # 状态顺序：x、y、z、roll、pitch、yaw、vx、vy、vz、

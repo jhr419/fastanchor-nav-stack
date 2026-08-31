@@ -62,6 +62,9 @@ class UnitreeSportModeToOdom(Node):
         self.velocity_in_world_frame = self.declare_parameter(
             "velocity_in_world_frame", True
         ).value
+        self.use_message_stamp = self.declare_parameter(
+            "use_message_stamp", False
+        ).value
         self.drop_on_error = self.declare_parameter("drop_on_error", False).value
         self.pose_covariance_diagonal = self.declare_parameter(
             "pose_covariance_diagonal",
@@ -101,10 +104,15 @@ class UnitreeSportModeToOdom(Node):
             )
 
         output = Odometry()
-        if message.stamp.sec >= 0 and 0 <= message.stamp.nanosec < 1_000_000_000:
+        if (
+            self.use_message_stamp
+            and message.stamp.sec >= 0
+            and 0 <= message.stamp.nanosec < 1_000_000_000
+        ):
             output.header.stamp.sec = message.stamp.sec
             output.header.stamp.nanosec = message.stamp.nanosec
         else:
+            # 默认使用 ROS 接收时刻，避免 Unitree 设备时钟和 LiDAR/ROS 时钟不一致。
             output.header.stamp = self.get_clock().now().to_msg()
         output.header.frame_id = self.odom_frame
         output.child_frame_id = self.base_frame

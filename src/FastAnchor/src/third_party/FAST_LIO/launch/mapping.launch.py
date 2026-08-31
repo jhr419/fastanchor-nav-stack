@@ -26,6 +26,7 @@ def generate_launch_description():
     rosbag_storage_id = LaunchConfiguration('rosbag_storage_id')
     rosbag_auto_shutdown = LaunchConfiguration('rosbag_auto_shutdown')
     localization_mode = LaunchConfiguration('localization_mode')
+    publish_tf = LaunchConfiguration('publish_tf')
     lid_topic = LaunchConfiguration('lid_topic')
     imu_topic = LaunchConfiguration('imu_topic')
     lidar_type = LaunchConfiguration('lidar_type')
@@ -70,6 +71,10 @@ def generate_launch_description():
         'localization_mode', default_value='false',
         description='Run FAST-LIO as a lightweight odometry source without building the map'
     )
+    declare_publish_tf_cmd = DeclareLaunchArgument(
+        'publish_tf', default_value='true',
+        description='Publish FAST-LIO odometry TF'
+    )
     declare_lid_topic_cmd = DeclareLaunchArgument(
         'lid_topic', default_value='/livox/lidar',
         description='Input LiDAR topic for FAST-LIO'
@@ -95,7 +100,8 @@ def generate_launch_description():
                     {'localization.odom_only_mode': localization_mode},
                     {'common.lid_topic': lid_topic},
                     {'common.imu_topic': imu_topic},
-                    {'preprocess.lidar_type': lidar_type}],
+                    {'preprocess.lidar_type': lidar_type},
+                    {'publish.tf_en': publish_tf}],
         output='screen'
     )
     rviz_node = Node(
@@ -116,6 +122,7 @@ def generate_launch_description():
     ld.add_action(declare_rosbag_storage_id_cmd)
     ld.add_action(declare_rosbag_auto_shutdown_cmd)
     ld.add_action(declare_localization_mode_cmd)
+    ld.add_action(declare_publish_tf_cmd)
     ld.add_action(declare_lid_topic_cmd)
     ld.add_action(declare_imu_topic_cmd)
     ld.add_action(declare_lidar_type_cmd)
