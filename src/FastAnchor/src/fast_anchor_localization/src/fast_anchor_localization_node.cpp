@@ -108,6 +108,29 @@ Eigen::Affine3d makeTransform(
     Eigen::AngleAxisd(roll, Eigen::Vector3d::UnitX());
 }
 
+Eigen::Affine3d interpolateAffine(
+  const Eigen::Affine3d & from,
+  const Eigen::Affine3d & to,
+  const double alpha)
+{
+  const double bounded_alpha = std::clamp(alpha, 0.0, 1.0);
+  if (bounded_alpha >= 1.0) {
+    return to;
+  }
+  if (bounded_alpha <= 0.0) {
+    return from;
+  }
+
+  const Eigen::Vector3d translation =
+    from.translation() +
+    bounded_alpha * (to.translation() - from.translation());
+  const Eigen::Quaterniond from_q(from.rotation());
+  const Eigen::Quaterniond to_q(to.rotation());
+  const Eigen::Quaterniond rotation = from_q.normalized().slerp(
+    bounded_alpha, to_q.normalized());
+  return Eigen::Translation3d(translation) * rotation;
+}
+
 void downsample(
   pcl::PointCloud<PointType>::Ptr cloud,
   const double leaf_size)
@@ -260,6 +283,37 @@ public:
       declare_parameter<double>("icp.fitness_score_threshold", fitness_score_threshold_);
     relocalization_interval_s_ =
       declare_parameter<double>("icp.relocalization_interval_s", relocalization_interval_s_);
+    icp_correction_gate_enabled_ =
+      declare_parameter<bool>("icp.correction_gate.enabled", icp_correction_gate_enabled_);
+    icp_correction_gate_warmup_accept_count_ =
+      declare_parameter<int>(
+      "icp.correction_gate.warmup_accept_count", icp_correction_gate_warmup_accept_count_);
+    icp_max_correction_translation_m_ =
+      declare_parameter<double>(
+      "icp.correction_gate.max_translation_m", icp_max_correction_translation_m_);
+    icp_max_correction_rotation_rad_ =
+      declare_parameter<double>(
+      "icp.correction_gate.max_rotation_rad", icp_max_correction_rotation_rad_);
+    icp_correction_smoothing_alpha_ =
+      declare_parameter<double>(
+      "icp.correction_gate.smoothing_alpha", icp_correction_smoothing_alpha_);
+    icp_gate_recovery_enabled_ =
+      declare_parameter<bool>(
+      "icp.correction_gate.recovery_enabled", icp_gate_recovery_enabled_);
+    icp_gate_recovery_min_reject_count_ =
+      declare_parameter<int>(
+      "icp.correction_gate.recovery_min_reject_count", icp_gate_recovery_min_reject_count_);
+    icp_gate_recovery_stable_translation_m_ =
+      declare_parameter<double>(
+      "icp.correction_gate.recovery_stable_translation_m",
+      icp_gate_recovery_stable_translation_m_);
+    icp_gate_recovery_stable_rotation_rad_ =
+      declare_parameter<double>(
+      "icp.correction_gate.recovery_stable_rotation_rad",
+      icp_gate_recovery_stable_rotation_rad_);
+    icp_gate_recovery_smoothing_alpha_ =
+      declare_parameter<double>(
+      "icp.correction_gate.recovery_smoothing_alpha", icp_gate_recovery_smoothing_alpha_);
     aligned_cloud_interval_s_ =
       declare_parameter<double>("output.aligned_cloud_interval_s", aligned_cloud_interval_s_);
     aligned_cloud_publish_rate_hz_ =
@@ -277,6 +331,30 @@ public:
     }
     if (lio_odom_history_size_ < 2) {
       throw std::runtime_error("lio_sync.odom_history_size must be at least 2");
+    }
+    if (icp_correction_gate_warmup_accept_count_ < 0) {
+      throw std::runtime_error("icp.correction_gate.warmup_accept_count must be non-negative");
+    }
+    if (icp_max_correction_translation_m_ < 0.0 ||
+      icp_max_correction_rotation_rad_ < 0.0)
+    {
+      throw std::runtime_error("icp.correction_gate max thresholds must be non-negative");
+    }
+    if (icp_correction_smoothing_alpha_ <= 0.0 || icp_correction_smoothing_alpha_ > 1.0) {
+      throw std::runtime_error("icp.correction_gate.smoothing_alpha must be in (0, 1]");
+    }
+    if (icp_gate_recovery_min_reject_count_ < 1) {
+      throw std::runtime_error("icp.correction_gate.recovery_min_reject_count must be at least 1");
+    }
+    if (icp_gate_recovery_stable_translation_m_ < 0.0 ||
+      icp_gate_recovery_stable_rotation_rad_ < 0.0)
+    {
+      throw std::runtime_error("icp.correction_gate recovery stability thresholds must be non-negative");
+    }
+    if (icp_gate_recovery_smoothing_alpha_ <= 0.0 ||
+      icp_gate_recovery_smoothing_alpha_ > 1.0)
+    {
+      throw std::runtime_error("icp.correction_gate.recovery_smoothing_alpha must be in (0, 1]");
     }
 
     base_to_body_ = makeTransform(base_to_body_xyz, base_to_body_rpy);
@@ -452,6 +530,8 @@ private:
 
     if (!have_initial_pose_ && use_initial_pose_param_) {
       map_to_odom_ = initial_map_to_base_ * latest_odom_to_base_.inverse();
+      accepted_icp_count_ = 0;
+      resetIcpGateRecoveryState();
       have_initial_pose_ = true;
       RCLCPP_INFO(get_logger(), "Initialized map->odom from initial_pose_* parameters.");
     } else if (!have_initial_pose_ && have_pending_initial_pose_) {
@@ -521,6 +601,8 @@ private:
   void applyInitialPoseLocked(const Eigen::Affine3d & map_to_base)
   {
     map_to_odom_ = map_to_base * latest_odom_to_base_.inverse();
+    accepted_icp_count_ = 0;
+    resetIcpGateRecoveryState();
     have_initial_pose_ = true;
     have_pending_initial_pose_ = false;
   }
@@ -601,6 +683,8 @@ private:
   void resetLocalizationStateLocked()
   {
     map_to_odom_ = Eigen::Affine3d::Identity();
+    accepted_icp_count_ = 0;
+    resetIcpGateRecoveryState();
     pending_initial_map_to_base_ = Eigen::Affine3d::Identity();
     have_initial_pose_ = false;
     have_pending_initial_pose_ = false;
@@ -614,6 +698,13 @@ private:
     last_icp_fitness_score_ = -1.0;
     last_icp_converged_ = false;
     path_msg_.poses.clear();
+  }
+
+  void resetIcpGateRecoveryState()
+  {
+    consecutive_icp_gate_rejections_ = 0;
+    have_last_rejected_map_to_odom_ = false;
+    last_rejected_map_to_odom_ = Eigen::Affine3d::Identity();
   }
 
   bool requestFastlioReset()
@@ -749,8 +840,12 @@ private:
         "ICP rejected: converged=%s fitness=%.4f threshold=%.4f",
         icp_.hasConverged() ? "true" : "false",
         fitness, fitness_score_threshold_);
+      // ICP 失败时不使用失败后的变换，继续发布里程计预测位姿，避免可视化被坏结果误导。
+      pcl::PointCloud<PointType> predicted_aligned;
+      pcl::transformPointCloud(
+        *source_base, predicted_aligned, guess_map_to_base.matrix().cast<float>());
       publishTfAndPose(msg->header.stamp, guess_map_to_base, scan_odom.odom_to_base, fitness);
-      publishAlignedCloud(aligned, msg->header.stamp);
+      publishAlignedCloud(predicted_aligned, msg->header.stamp);
       last_aligned_cloud_stamp_ = stamp;
       publishIcpResult(msg->header.stamp, false, fitness, guess_map_to_base);
       publishStatus(
@@ -763,23 +858,91 @@ private:
     const Eigen::Affine3d refined_map_to_base(refined_f.matrix().cast<double>());
     const Eigen::Affine3d icp_correction = refined_map_to_base * guess_map_to_base.inverse();
     const Eigen::AngleAxisd correction_rotation(icp_correction.rotation());
-    map_to_odom_ = refined_map_to_base * scan_odom.odom_to_base.inverse();
+    const double correction_translation = icp_correction.translation().norm();
+    const double correction_angle = correction_rotation.angle();
+    const bool gate_warmed_up =
+      accepted_icp_count_ >= icp_correction_gate_warmup_accept_count_;
+    const bool large_correction =
+      correction_translation > icp_max_correction_translation_m_ ||
+      correction_angle > icp_max_correction_rotation_rad_;
+    const Eigen::Affine3d target_map_to_odom =
+      refined_map_to_base * scan_odom.odom_to_base.inverse();
+    bool recovery_accept = false;
+    if (icp_correction_gate_enabled_ && gate_warmed_up && large_correction) {
+      if (icp_gate_recovery_enabled_) {
+        bool stable_recovery_target = false;
+        if (have_last_rejected_map_to_odom_) {
+          const Eigen::Affine3d recovery_target_delta =
+            last_rejected_map_to_odom_.inverse() * target_map_to_odom;
+          const Eigen::AngleAxisd recovery_target_rotation(recovery_target_delta.rotation());
+          stable_recovery_target =
+            recovery_target_delta.translation().norm() <= icp_gate_recovery_stable_translation_m_ &&
+            recovery_target_rotation.angle() <= icp_gate_recovery_stable_rotation_rad_;
+        }
+        consecutive_icp_gate_rejections_ =
+          stable_recovery_target ? consecutive_icp_gate_rejections_ + 1 : 1;
+        last_rejected_map_to_odom_ = target_map_to_odom;
+        have_last_rejected_map_to_odom_ = true;
+        recovery_accept =
+          consecutive_icp_gate_rejections_ >= icp_gate_recovery_min_reject_count_;
+      }
+    }
+
+    if (icp_correction_gate_enabled_ && gate_warmed_up && large_correction && !recovery_accept) {
+      last_icp_fitness_score_ = fitness;
+      last_icp_converged_ = false;
+      // ICP fitness 合格但修正量过大时，说明很可能匹配到了错误局部极值，保持预测位姿等待下一帧。
+      pcl::PointCloud<PointType> predicted_aligned;
+      pcl::transformPointCloud(
+        *source_base, predicted_aligned, guess_map_to_base.matrix().cast<float>());
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 1000,
+        "ICP correction rejected by gate: fitness=%.4f correction_norm=%.3f/%.3f m "
+        "correction_angle=%.3f/%.3f deg accepted_count=%d recovery_reject_count=%d",
+        fitness, correction_translation, icp_max_correction_translation_m_,
+        correction_angle * 180.0 / M_PI,
+        icp_max_correction_rotation_rad_ * 180.0 / M_PI,
+        accepted_icp_count_, consecutive_icp_gate_rejections_);
+      publishTfAndPose(msg->header.stamp, guess_map_to_base, scan_odom.odom_to_base, fitness);
+      publishAlignedCloud(predicted_aligned, msg->header.stamp);
+      last_aligned_cloud_stamp_ = stamp;
+      publishIcpResult(msg->header.stamp, false, fitness, guess_map_to_base);
+      publishStatus(
+        msg->header.stamp, fast_anchor_interfaces::msg::LocalizationStatus::LOST,
+        "ICP correction rejected by jump gate", false, fitness);
+      return;
+    }
+
+    const double smoothing_alpha = recovery_accept ?
+      icp_gate_recovery_smoothing_alpha_ :
+      (gate_warmed_up ? icp_correction_smoothing_alpha_ : 1.0);
+    map_to_odom_ = interpolateAffine(map_to_odom_, target_map_to_odom, smoothing_alpha);
+    ++accepted_icp_count_;
+    if (!recovery_accept) {
+      resetIcpGateRecoveryState();
+    }
+    const Eigen::Affine3d output_map_to_base = map_to_odom_ * scan_odom.odom_to_base;
+    if (smoothing_alpha < 1.0) {
+      pcl::transformPointCloud(
+        *source_base, aligned, output_map_to_base.matrix().cast<float>());
+    }
     last_icp_fitness_score_ = fitness;
     last_icp_converged_ = true;
-    publishTfAndPose(msg->header.stamp, refined_map_to_base, scan_odom.odom_to_base, fitness);
+    publishTfAndPose(msg->header.stamp, output_map_to_base, scan_odom.odom_to_base, fitness);
     publishAlignedCloud(aligned, msg->header.stamp);
     last_aligned_cloud_stamp_ = stamp;
-    publishIcpResult(msg->header.stamp, true, fitness, refined_map_to_base);
+    publishIcpResult(msg->header.stamp, true, fitness, output_map_to_base);
     publishStatus(
       msg->header.stamp, fast_anchor_interfaces::msg::LocalizationStatus::TRACKING,
-      "ICP accepted", true, fitness);
+      recovery_accept ? "ICP recovery accepted" : "ICP accepted", true, fitness);
     RCLCPP_INFO_THROTTLE(
       get_logger(), *get_clock(), 1000,
       "ICP accepted: fitness=%.4f source_points=%zu correction_xyz=[%.3f %.3f %.3f] "
-      "correction_angle_deg=%.3f",
+      "correction_angle_deg=%.3f smoothing_alpha=%.2f accepted_count=%d recovery=%s",
       fitness, source_base->size(), icp_correction.translation().x(),
       icp_correction.translation().y(), icp_correction.translation().z(),
-      correction_rotation.angle() * 180.0 / M_PI);
+      correction_rotation.angle() * 180.0 / M_PI, smoothing_alpha, accepted_icp_count_,
+      recovery_accept ? "true" : "false");
   }
 
   struct OdomSample
@@ -1130,6 +1293,19 @@ private:
   int max_iterations_ = 40;
   double fitness_score_threshold_ = 1.0;
   double relocalization_interval_s_ = 0.2;
+  bool icp_correction_gate_enabled_ = true;
+  int icp_correction_gate_warmup_accept_count_ = 3;
+  int accepted_icp_count_ = 0;
+  double icp_max_correction_translation_m_ = 0.35;
+  double icp_max_correction_rotation_rad_ = 0.35;
+  double icp_correction_smoothing_alpha_ = 0.6;
+  bool icp_gate_recovery_enabled_ = true;
+  bool have_last_rejected_map_to_odom_ = false;
+  int icp_gate_recovery_min_reject_count_ = 5;
+  int consecutive_icp_gate_rejections_ = 0;
+  double icp_gate_recovery_stable_translation_m_ = 0.20;
+  double icp_gate_recovery_stable_rotation_rad_ = 0.20;
+  double icp_gate_recovery_smoothing_alpha_ = 0.25;
   double aligned_cloud_interval_s_ = 0.0;
   double aligned_cloud_publish_rate_hz_ = 25.0;
   double path_publish_interval_s_ = 0.0;
@@ -1144,6 +1320,7 @@ private:
   Eigen::Affine3d latest_odom_to_body_ = Eigen::Affine3d::Identity();
   Eigen::Affine3d latest_odom_to_base_ = Eigen::Affine3d::Identity();
   Eigen::Affine3d map_to_odom_ = Eigen::Affine3d::Identity();
+  Eigen::Affine3d last_rejected_map_to_odom_ = Eigen::Affine3d::Identity();
   builtin_interfaces::msg::Time latest_odom_stamp_;
   rclcpp::Time last_icp_stamp_{0, 0, RCL_ROS_TIME};
   rclcpp::Time last_aligned_cloud_stamp_{0, 0, RCL_ROS_TIME};

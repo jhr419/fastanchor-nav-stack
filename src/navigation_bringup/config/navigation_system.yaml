@@ -86,7 +86,8 @@ unitree_sportmode_to_odom:
     base_frame: base_link
     velocity_in_world_frame: true
     use_message_stamp: false
-    drop_on_error: true
+    # Go2 实测静止可出现 error_code=100/1001，但 position/velocity 仍可用于融合。
+    drop_on_error: false
     pose_covariance_diagonal: [0.04, 0.04, 0.09, 0.03, 0.03, 0.05]
     twist_covariance_diagonal: [0.04, 0.04, 0.09, 0.04, 0.04, 0.05]
 
@@ -101,6 +102,7 @@ fast_anchor_odom_frame_adapter:
       fast_lio_base_odom: /fast_anchor/fusion/fast_lio_base_odom
       filtered_base_odom: /fast_anchor/fusion/filtered_base_odom
       fused_body_odom: /fast_anchor/fusion/fused_body_odom
+      leg_odom: /leg_odom
     # T_base_body，必须与 FastAnchor 定位外参保持一致
     base_to_body_xyz: [-0.3, 0.0, -0.2]
     base_to_body_rpy: [0.0, 0.0, 0.0]
@@ -116,6 +118,19 @@ fast_anchor_odom_frame_adapter:
       unhealthy_pose_covariance: 1000.0
       unhealthy_twist_covariance: 1000.0
       min_dt_for_speed_check_s: 0.02
+    # 用 Unitree 腿里程计约束 FAST-LIO2 的短时间增量，发现明显飘移时提高协方差。
+    consistency_check:
+      enabled: true
+      leg_match_tolerance_s: 0.15
+      min_interval_s: 0.5
+      max_interval_s: 2.0
+      max_translation_error_m: 0.35
+      max_yaw_error_rad: 0.35
+      stationary_leg_motion_threshold_m: 0.05
+      max_lio_motion_when_leg_stationary_m: 0.18
+      min_distance_for_ratio_check_m: 0.08
+      max_distance_ratio: 3.0
+      leg_history_size: 200
 
 # FAST-LIO2 提供绝对 6DoF 位姿，Go2 提供 base_link 下的三轴线速度
 fast_anchor_ekf:

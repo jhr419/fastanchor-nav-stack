@@ -1,239 +1,484 @@
-# FastAnchor + FastPlanner + SCAN-Planner
+# fastanchor-nav-stack 使用说明
 
-This workspace contains a minimal ROS 2 connection from FastAnchor localization,
-through the FastPlanner A* global planner, to SCAN-Planner and the chassis command.
-The copied upstream modules remain separate; no navigation adapter is required because
-their existing ROS 2 message types match.
+本仓库把 FastAnchor 定位、FAST-LIO2 前端、FastPlanner 全局规划、SCAN-Planner 局部规划和 Unitree Go2 控制接口集成到一个 ROS 2 Humble 工作区中。
 
-## Build
+默认运行链路：
+
+```text
+Livox MID360/MID360s + IMU
+  -> FAST-LIO2 /Odometry
+  -> FAST-LIO2 与 Unitree 腿里程计融合
+  -> FastAnchor ICP 地图定位
+  -> FastPlanner A* 全局路径
+  -> SCAN-Planner 局部轨迹
+  -> /cmd_vel
+```
+
+## 1. 构建
+
+首次构建：
 
 ```bash
+cd ~/hy_ws/fastanchor-nav-stack
 source /opt/ros/humble/setup.bash
-cd <workspace>
+source setup.bash
 colcon build --symlink-install
 source install/setup.bash
 ```
 
-## Start
-
-The integrated launch reads its defaults from
-`src/navigation_bringup/config/navigation_system.yaml`, including the shared
-PCD map used by FastAnchor and FastPlanner:
+只重新构建定位和导航相关包：
 
 ```bash
+cd ~/hy_ws/fastanchor-nav-stack
+source /opt/ros/humble/setup.bash
+source setup.bash
+source install/setup.bash
+colcon build --symlink-install --packages-select \
+  fast_anchor_fusion fast_anchor_localization fast_anchor_bringup navigation_bringup
+source install/setup.bash
+```
+
+如果从另一台机器复制了整个工作区，并且编译时报 `CMakeCache.txt directory is different`，说明 `build/`、`install/`、`log/` 中带了旧机器路径。清掉后重新构建：
+
+```bash
+cd ~/hy_ws/fastanchor-nav-stack
+rm -rf build install log
+source /opt/ros/humble/setup.bash
+source setup.bash
+colcon build --symlink-install
+source install/setup.bash
+```
+
+## 2. 从本机复制到 Go2
+
+在本机执行：
+
+```bash
+cd ~/ros_ws
+tar --exclude='fastanchor-nav-stack/build' \
+    --exclude='fastanchor-nav-stack/install' \
+    --exclude='fastanchor-nav-stack/log' \
+    -czf fastanchor-nav-stack.tar.gz fastanchor-nav-stack/
+
+scp fastanchor-nav-stack.tar.gz go2@192.168.123.99:~/hy_ws/
+```
+
+在 Go2 上执行：
+
+```bash
+ssh go2@192.168.123.99
+cd ~/hy_ws
+tar -xzf fastanchor-nav-stack.tar.gz
+cd fastanchor-nav-stack
+source /opt/ros/humble/setup.bash
+source setup.bash
+colcon build --symlink-install
+source install/setup.bash
+```
+
+## 3. 启动导航系统
+
+默认参数来自：
+
+```text
+src/navigation_bringup/config/navigation_system.yaml
+```
+
+启动：
+
+```bash
+cd ~/hy_ws/fastanchor-nav-stack
+source /opt/ros/humble/setup.bash
+source setup.bash
+source install/setup.bash
+
 ros2 launch navigation_bringup navigation_system.launch.py
 ```
 
-Edit that YAML for persistent robot configuration. Launch arguments remain
-available for one-off overrides.
-
-The integrated launch is headless by default on this performance branch: all
-three RViz processes are disabled so onboard visualization cannot consume the
-navigation CPU budget. Enable only the views needed for debugging with
-`start_localization_rviz:=true`, `start_local_planner_rviz:=true`, or
-`start_global_planner_rviz:=true`.
-
-SCAN-Planner selects its local target 4.0 m ahead of the robot by default, inside
-the 5.0 m local sensing range. Override it when needed with
-`local_target_distance:=<metres>`.
-
-The integrated launch defaults to the connected `mid360s` LiDAR. Use
-`lidar_model:=mid360` only when running with the original MID360 model.
-
-Select the LiDAR model at launch time without changing source files:
-
-```bash
-# MID360s (default)
-ros2 launch navigation_bringup navigation_system.launch.py \
-  map_pcd_path:=$PWD/maps/map_preprocessed.pcd lidar_model:=mid360s
-
-# MID360
-ros2 launch navigation_bringup navigation_system.launch.py \
-  map_pcd_path:=$PWD/maps/map_preprocessed.pcd lidar_model:=mid360
-```
-
-The default frames are `map -> odom -> base_link`. The launch arguments
-`localization_pose_topic`, `goal_topic`, `global_path_topic`, and `cmd_vel_topic`
-only change interface names and do not alter planner behavior.
-
-## CPU-optimized runtime
-
-The optimized defaults preserve 5 Hz ICP, 20 Hz occupancy fusion, and 100 Hz
-control. They reduce non-critical work as follows:
-
-- FastAnchor preprocesses every fresh LiDAR cloud and republishes the latest
-  aligned result at a fixed 25 Hz from a separate executor thread. ICP itself
-  remains limited to 5 Hz, and the full path remains limited to 2 Hz.
-- SCAN publishes occupancy visualization at 5 Hz. Its two visualization layers
-  share one voxel traversal and serialization runs on a dedicated worker thread,
-  allowing Linux to schedule visualization and planning on different CPU cores.
-- RViz is opt-in. On a fully headless platform, pass
-  `grid_visualization_rate_hz:=0` to remove the remaining grid visualization work.
-
-Restore the previous diagnostic rates without reverting code:
+常用启动覆盖参数：
 
 ```bash
 ros2 launch navigation_bringup navigation_system.launch.py \
   map_pcd_path:=$PWD/maps/map_preprocessed2.pcd \
-  aligned_cloud_publish_rate_hz:=0.0 \
-  path_publish_interval_s:=0.0 \
-  grid_visualization_rate_hz:=20.0 \
-  start_localization_rviz:=true \
-  start_local_planner_rviz:=true
+  lidar_model:=mid360 \
+  odometry_fusion_mode:=leg \
+  local_target_distance:=3.0
 ```
 
-For an onboard before/after measurement, run
-`bash scripts/profile_navigation_cpu.sh 60` while following the same route and
-using the same map and sensor rates. See `docs/performance.md` for the acceptance
-method and limitations of the current workstation-only validation.
+重要说明：
 
-## Data flow
+- `map_pcd_path` 必须指向真实存在的 PCD 地图。
+- `lidar_model` 可选 `mid360` 或 `mid360s`。
+- `odometry_fusion_mode:=leg` 会启用 FAST-LIO2 与 Unitree 腿里程计融合。
+- `odometry_fusion_mode:=none` 会让 FastAnchor 直接使用 FAST-LIO2 输出。
+- `/fast_anchor/odom` 需要收到初始位姿后才会稳定输出。
 
-| Module | Input | Output | ROS 2 type |
-|---|---|---|---|
-| FastAnchor | `/initialpose` | `/fast_anchor/odom` | `geometry_msgs/msg/PoseWithCovarianceStamped` -> `nav_msgs/msg/Odometry` |
-| FastPlanner A* | `/fast_anchor/odom`, `/move_base_simple/goal` | `/planned_path` | `nav_msgs/msg/Odometry`, `geometry_msgs/msg/PoseStamped` -> `nav_msgs/msg/Path` |
-| SCAN-Planner | `/fast_anchor/odom`, `/fast_anchor/aligned_cloud`, `/planned_path` | `/planning/bspline` | `nav_msgs/msg/Odometry`, `sensor_msgs/msg/PointCloud2`, `nav_msgs/msg/Path` -> `scan_planner_msgs/msg/Bspline` |
-| SCAN controller | `/planning/bspline`, `/fast_anchor/odom` | `/cmd_vel` | `scan_planner_msgs/msg/Bspline`, `nav_msgs/msg/Odometry` -> `geometry_msgs/msg/Twist` |
+## 4. 给定位初值
 
-The existing blue/green interactive markers are reused. The initial-pose marker publishes
-to FastAnchor. In integrated mode the goal marker publishes only to FastPlanner; the direct
-single-waypoint path publication is disabled so SCAN-Planner only receives FastPlanner output.
+推荐使用 RViz 的 `2D Pose Estimate`，发布到：
 
-## Multi-waypoint missions
+```text
+/initialpose
+```
 
-The integrated launch can read an ordered waypoint list from a ROS 2 parameter YAML. The
-mission manager publishes only the current waypoint to FastPlanner. It waits until FastPlanner
-publishes a path whose endpoint matches that waypoint, and then waits for odometry to remain
-within the configured arrival tolerance before publishing the next waypoint. Every leg
-therefore continues to use the full FastPlanner A* -> SCAN-Planner -> controller chain; later
-waypoints cannot overwrite an earlier waypoint before it is planned and reached.
+命令行方式：
 
-Create a YAML file using numeric `x, y, z` triples in the `map` frame:
+```bash
+ros2 topic pub --once /initialpose geometry_msgs/msg/PoseWithCovarianceStamped \
+"{header: {frame_id: 'map'}, pose: {pose: {position: {x: 0.0, y: 0.0, z: 0.0}, orientation: {w: 1.0}}, covariance: [0.25, 0, 0, 0, 0, 0, 0, 0.25, 0, 0, 0, 0, 0, 0, 0.25, 0, 0, 0, 0, 0, 0, 0.1, 0, 0, 0, 0, 0, 0, 0.1, 0, 0, 0, 0, 0, 0, 0.1]}}"
+```
+
+重置定位后重新给初值：
+
+```bash
+ros2 service call /fast_anchor_reset_localization \
+  fast_anchor_interfaces/srv/ResetLocalization \
+  "{reset_to_initial_pose: false}"
+```
+
+## 5. 关键话题检查
+
+启动后另开终端：
+
+```bash
+cd ~/hy_ws/fastanchor-nav-stack
+source /opt/ros/humble/setup.bash
+source setup.bash
+source install/setup.bash
+
+ros2 topic hz /livox/lidar
+ros2 topic hz /livox/imu
+ros2 topic hz /Odometry
+ros2 topic hz /leg_odom
+ros2 topic hz /fast_anchor/fusion/filtered_base_odom
+ros2 topic hz /fast_anchor/odom
+```
+
+正常情况下：
+
+| 话题 | 作用 | 典型频率 |
+|---|---|---|
+| `/livox/lidar` | Livox 点云 | 约 10 Hz |
+| `/livox/imu` | Livox IMU | 约 200 Hz |
+| `/Odometry` | FAST-LIO2 前端里程计 | 约 10 Hz |
+| `/leg_odom` | Unitree 高层状态转标准里程计 | 约 20 Hz |
+| `/fast_anchor/fusion/filtered_base_odom` | EKF 融合后的 base_link 里程计 | 约 50 Hz |
+| `/fast_anchor/odom` | FastAnchor 地图定位输出 | 给初值后输出 |
+
+定位状态：
+
+```bash
+ros2 topic echo /fast_anchor/status
+ros2 topic echo /fast_anchor/icp_result
+```
+
+## 6. 单点导航
+
+给一个 `map` 坐标系下的目标点：
+
+```bash
+ros2 topic pub --once /move_base_simple/goal geometry_msgs/msg/PoseStamped \
+"{header: {frame_id: 'map'}, pose: {position: {x: 1.0, y: 0.0, z: 0.3}, orientation: {w: 1.0}}}"
+```
+
+导航数据流：
+
+```text
+/move_base_simple/goal
+  -> /planned_path
+  -> /scan_planner/initial_path
+  -> /planning/bspline
+  -> /cmd_vel
+```
+
+暂停局部规划和控制：
+
+```bash
+ros2 service call /scan_planner/set_navigation_enabled \
+  std_srvs/srv/SetBool "{data: false}"
+```
+
+恢复局部规划和控制：
+
+```bash
+ros2 service call /scan_planner/set_navigation_enabled \
+  std_srvs/srv/SetBool "{data: true}"
+```
+
+## 7. Action 多点任务
+
+Action 名称：
+
+```text
+/follow_waypoints
+```
+
+Action 类型：
+
+```text
+nav_interfaces/action/FollowWaypoints
+```
+
+字段定义：
+
+```text
+Goal:
+  string mission_id
+  string frame_id
+  geometry_msgs/Point[] waypoints
+
+Result:
+  bool success
+  string message
+
+Feedback:
+  uint32 current_index
+  uint32 total_waypoints
+  float32 progress
+  string state
+```
+
+发送多点任务：
+
+```bash
+ros2 action send_goal /follow_waypoints nav_interfaces/action/FollowWaypoints \
+"{mission_id: 'demo_route', frame_id: 'map', waypoints: [{x: 1.0, y: 0.0, z: 0.3}, {x: 2.0, y: 0.5, z: 0.3}, {x: 1.0, y: 0.0, z: 0.3}]}" \
+--feedback
+```
+
+查看任务状态：
+
+```bash
+ros2 topic echo /waypoint_mission/status
+```
+
+状态消息是 JSON 字符串，常见状态包括：
+
+| 状态 | 含义 |
+|---|---|
+| `IDLE` | 没有任务 |
+| `STARTING` | 任务启动中 |
+| `WAITING_FOR_ODOMETRY` | 等待定位里程计 |
+| `WAITING_FOR_PATH` | 已发布当前目标，等待全局路径确认 |
+| `NAVIGATING` | 正在执行当前路点 |
+| `PAUSING` | 暂停请求处理中 |
+| `PAUSED` | 已暂停 |
+| `RESUMING` | 恢复请求处理中 |
+| `COMPLETED` | 路点全部完成 |
+
+暂停当前任务：
+
+```bash
+ros2 service call /waypoint_mission/control nav_interfaces/srv/ControlMission \
+"{mission_id: 'demo_route', command: 1}"
+```
+
+恢复当前任务：
+
+```bash
+ros2 service call /waypoint_mission/control nav_interfaces/srv/ControlMission \
+"{mission_id: 'demo_route', command: 2}"
+```
+
+`mission_id` 可以留空，此时控制当前任务：
+
+```bash
+ros2 service call /waypoint_mission/control nav_interfaces/srv/ControlMission \
+"{mission_id: '', command: 1}"
+```
+
+## 8. 参数在哪里改
+
+| 功能 | 配置位置 | 常改参数 |
+|---|---|---|
+| 集成启动默认值 | `src/navigation_bringup/config/navigation_system.yaml` | 地图、雷达型号、话题名、是否启动各模块 |
+| FastAnchor ICP 定位 | `src/FastAnchor/src/fast_anchor_bringup/config/fast_anchor_localization.yaml` | ICP 阈值、修正门控、点云过滤 |
+| FAST-LIO2 | `src/FastAnchor/src/third_party/FAST_LIO/config/mid360_localization.yaml` | 雷达/IMU 话题、外参、滤波范围 |
+| Livox 驱动 | `src/FastAnchor/src/third_party/livox_ros_driver2/config/MID360_config.json` | 雷达 IP、主机 IP |
+| Livox MID360s 驱动 | `src/FastAnchor/src/third_party/livox_ros_driver2/config/MID360s_config.json` | 雷达 IP、主机 IP |
+| A* 全局规划 | `src/FastPlanner/src/3dnav_global_planning/config/astar_global_planner.yaml` | 分辨率、障碍膨胀、搜索参数 |
+| SCAN 局部规划 | `src/SCAN-Planner/planner/plan_manage/config/planner.yaml` | 局部地图、规划 horizon、碰撞参数 |
+| 控制器 | `src/SCAN-Planner/planner/plan_manage/config/controllers.yaml` | 速度限制、跟踪控制参数 |
+
+常用 launch 参数：
+
+| 参数 | 默认值 | 说明 |
+|---|---|---|
+| `map_pcd_path` | `../../../maps/map_preprocessed2.pcd` | 地图 PCD |
+| `lidar_model` | `mid360` | `mid360` 或 `mid360s` |
+| `odometry_fusion_mode` | `leg` | `leg` 启用腿里程计融合，`none` 直接用 FAST-LIO2 |
+| `unitree_sportmode_topic` | `/lf/sportmodestate` | Unitree 高层状态 |
+| `leg_odom_topic` | `/leg_odom` | 转换后的腿里程计 |
+| `raw_fast_lio_odom_topic` | `/Odometry` | FAST-LIO2 原始里程计 |
+| `fused_body_odom_topic` | `/fast_anchor/fusion/fused_body_odom` | 给 FastAnchor 使用的融合 body 里程计 |
+| `localization_pose_topic` | `/fast_anchor/odom` | 地图定位输出 |
+| `goal_topic` | `/move_base_simple/goal` | 单点目标输入 |
+| `global_path_topic` | `/planned_path` | 全局路径输出 |
+| `cmd_vel_topic` | `/cmd_vel` | 速度命令 |
+| `local_target_distance` | `4.0` | SCAN 从全局路径上截取局部目标的距离 |
+| `start_localization_rviz` | `false` | 是否启动定位 RViz |
+| `start_global_planner_rviz` | `false` | 是否启动全局规划 RViz |
+| `start_local_planner_rviz` | `false` | 是否启动 SCAN RViz |
+
+## 9. 定位稳定性保护
+
+当前默认开启两层保护。
+
+第一层在 `fast_anchor_odom_frame_adapter` 中，配置位于：
+
+```text
+src/navigation_bringup/config/navigation_system.yaml
+```
+
+参数块：
 
 ```yaml
-waypoint_mission_manager:
+fast_anchor_odom_frame_adapter:
   ros__parameters:
-    waypoints: [
-      1.0, 0.0, 0.3,
-      2.0, 1.0, 0.3,
-      3.0, 0.0, 0.3
-    ]
+    consistency_check:
+      enabled: true
+      max_translation_error_m: 0.35
+      max_yaw_error_rad: 0.35
+      max_lio_motion_when_leg_stationary_m: 0.18
+      max_distance_ratio: 3.0
 ```
 
-An editable example is installed from
-`src/navigation_bringup/config/waypoints.example.yaml`. Start the mission with an absolute
-YAML path:
+作用：短时间窗口内比较 FAST-LIO2 和 Unitree 腿里程计。如果 FAST-LIO2 明显飘，会提高 FAST-LIO2 协方差，让 EKF 降低它的权重。
+
+第二层在 FastAnchor ICP 中，配置位于：
+
+```text
+src/FastAnchor/src/fast_anchor_bringup/config/fast_anchor_localization.yaml
+```
+
+参数块：
+
+```yaml
+icp:
+  correction_gate:
+    enabled: true
+    warmup_accept_count: 3
+    max_translation_m: 0.35
+    max_rotation_rad: 0.35
+    smoothing_alpha: 0.6
+    recovery_enabled: true
+    recovery_min_reject_count: 5
+    recovery_stable_translation_m: 0.20
+    recovery_stable_rotation_rad: 0.20
+    recovery_smoothing_alpha: 0.25
+```
+
+作用：ICP fitness 合格但单次修正过大时，先拒绝这次修正，避免定位跳飞。如果连续多帧 ICP 都给出稳定的大修正，则进入 recovery，用较小 alpha 慢慢拉回地图。
+
+调参建议：
+
+| 现象 | 建议 |
+|---|---|
+| 正常运动也频繁 `FAST-LIO odometry marked unhealthy` | 增大 `max_translation_error_m` 或 `max_distance_ratio` |
+| 静止时 FAST-LIO2 慢慢漂但没有触发 | 减小 `max_lio_motion_when_leg_stationary_m` |
+| ICP 经常 `rejected by gate` 且无法恢复 | 增大 `max_translation_m` 或减小 `recovery_min_reject_count` |
+| ICP 偶发把定位拉飞 | 减小 `max_translation_m`，或增大 `recovery_min_reject_count` |
+| 定位被拉回太慢 | 增大 `recovery_smoothing_alpha` |
+
+## 10. 录制 bag
+
+静止测试：
 
 ```bash
-ros2 launch navigation_bringup navigation_system.launch.py \
-  map_pcd_path:=$PWD/maps/map_preprocessed2.pcd \
-  waypoints_file:=$PWD/src/navigation_bringup/config/waypoints.example.yaml
+ros2 bag record -o odom_static_test \
+  /livox/lidar /livox/imu /Odometry /leg_odom \
+  /fast_anchor/fusion/fast_lio_base_odom \
+  /fast_anchor/fusion/filtered_base_odom \
+  /fast_anchor/fusion/fused_body_odom \
+  /fast_anchor/odom /fast_anchor/status /fast_anchor/icp_result /tf /tf_static
 ```
 
-Useful mission arguments are:
-
-- `waypoint_xy_tolerance` (default `0.5` m): arrival radius in the XY plane.
-- `waypoint_z_tolerance` (default `-1.0`): negative disables the Z arrival check.
-- `waypoint_path_goal_tolerance` (default `0.75` m): allowed XY error when confirming that
-  FastPlanner produced a path for the current waypoint.
-- `waypoint_hold_time` (default `0.5` s): required continuous time inside the tolerance.
-- `waypoint_loop` (default `false`): repeat the route after the final waypoint.
-
-The transient-local `/waypoint_mission/status` topic publishes compact JSON status messages.
-If `waypoints_file` is omitted, the mission manager is not started and interactive single-goal
-navigation behaves as before.
-
-## 本窗口问题汇总（2026-07-24）
-
-### 已分析的问题
-
-- 已审计最小数据链路：FastAnchor 通过 `/fast_anchor/odom` 和
-  `/fast_anchor/aligned_cloud` 提供定位，FastPlanner 接收定位和目标并发布
-  `/planned_path`，SCAN-Planner 接收路径和实时点云并发布 `/planning/bspline`，
-  控制器最终发布 `/cmd_vel`。当前局部规划器确认为 SCAN-Planner，不是 EGO。
-- 已核对可视化职责：定位与 SCAN-Planner RViz 用于日常运行，
-  `pct_global_planner.rviz` 只提供全局规划调试显示，正常运行不必默认打开。
-- 已核对 SCAN 栅格实现与原项目。`grid_map.cpp` 和 `planner.yaml` 曾通过 SHA256
-  与原始 SCAN-Planner 对比一致；RViz 中只保留集成需要的 frame 和 topic 修改。
-- 已分析局部目标过远问题。FastPlanner 发布完整路径，SCAN 实际通过
-  `fsm.planning_horizon` 从路径上选局部目标；原值 7.5 m 大于 5.0 m 的局部感知范围。
-- 已分析障碍高度参数。`grid_map.obstacles_inflation_z_up` 是障碍物向上膨胀量，
-  它只改变碰撞模型，不会提升 Go2 的真实抬腿或越障能力。
-- 已按要求执行在线诊断，且诊断前先执行了 `source setup.bash`。定位位姿和配准点云
-  均约 10 Hz，在线膨胀点云约 3.8 Hz，控制命令约 100 Hz；FastPlanner 状态为
-  `SUCCESS`，局部规划失败发生在 SCAN 内部 A* 和 B-spline 优化阶段。
-
-### 已解决的问题
-
-- 已完成三个独立 ROS 2 包之间的最小接口连接，不需要额外
-  `navigation_adapter`；原始目录未被修改。
-- 定位和 SCAN-Planner 可视化默认开启；FastPlanner 独立调试 RViz 默认关闭，
-  可通过 `start_global_planner_rviz:=true` 临时开启。
-- 已加入 `lidar_model` 启动参数，支持 `mid360` 与 `mid360s`；集成启动默认值为
-  `mid360s`，本次在线运行实际使用 `lidar_model:=mid360`。
-- SCAN 的普通占用云和膨胀云发布逻辑已恢复为原版，并使用 Release 模式构建。
-  隔离测试中输入点云为 10 Hz 时，`/grid_map/occupancy` 和
-  `/grid_map/occupancy_inflate` 均达到约 20 Hz。
-- 已加入 `local_target_distance` 参数，默认 4.0 m；本次在线进程显式使用 3.0 m，
-  运行时 `fsm.planning_horizon` 已确认是 3.0 m。
-- 已按“规划模型允许 40 cm 低矮障碍”的要求设置：
-  `grid_map.body_height=0.50`、`grid_map.obstacles_inflation_z_up=0.10`、
-  `obstacle_min_relative_z=0.40`。相关包构建成功，SCAN 启动测试 2/2 通过。
-- ROS 2 CLI daemon 的 `rclpy.ok()` 异常已通过重启 daemon 恢复，不影响正在运行的
-  导航节点。
-
-### 尚未解决的问题
-
-- **SCAN 在线局部规划仍失败。** 当前日志持续出现
-  `The robot is inside an obstacle`、`A-star failed; aborting optimization` 和
-  `Ran out of pool`。在线点云检查显示机器人当前位置附近没有占用点，错误来自
-  初始轨迹控制点而非机器人当前体素。
-- **全局路径和 SCAN 的 Z 语义不一致。** FastPlanner 当前路径首点已经使用机体
-  定位高度，例如约 0.323 m；SCAN 在
-  `scan_replan_fsm.cpp::pathCallback()` 中又固定增加 `body_height=0.50 m`，使对应
-  waypoint 变成约 0.823 m。在线观察到 SCAN 全局参考轨迹一度上升到约 0.93 m，
-  进入障碍占用层并触发局部 A* 失败。建议下一步让 FastPlanner 始终输出地面高度
-  路径，保留 SCAN 原有的 `+ body_height`，以避免修改局部规划算法。
-- FastAnchor 启动后定位 Z 曾从约 -1.35 m 变化到正值，定位高度尚未稳定时
-  FastPlanner 已开始重规划。尚未增加定位稳定等待或目标门控逻辑。
-- “40 cm”目前只是规划器碰撞判定阈值，没有加入爬楼梯步态、足端轨迹或抬腿控制，
-  也没有完成真机 40 cm 越障测试。单个 40 cm 垂直障碍仍存在严重碰撞和跌倒风险。
-- SCAN 的 GPU 渲染节点属于仿真传感器渲染，并不是实机膨胀点云可视化；当前实机
-  bringup 未启用该 GPU 仿真节点。
-- 在线整机负载下栅格可视化约 3.8 Hz，低于隔离 Release 测试的约 20 Hz，尚未做
-  进一步性能修改，以保持 SCAN 原始发布逻辑。
-- 在线日志发现 `/move_base_simple/goal` 存在一个 QoS 不兼容发布者；另一个兼容
-  发布者仍能触发全局规划，因此不是本次局部 A* 失败的直接原因，但尚未统一 QoS。
-- 当前 `maps/` 中实际存在 `map_preprocessed1.pcd` 与 `map_preprocessed2.pcd`，没有
-  `map_preprocessed.pcd`。本次成功在线启动使用的是 `map_preprocessed2.pcd`，启动时
-  应传入实际存在的地图文件。
-
-当前在线启动示例：
+运动测试：
 
 ```bash
-cd <workspace>
-source setup.bash
-ros2 launch navigation_bringup navigation_system.launch.py \
-  map_pcd_path:=$PWD/maps/map_preprocessed2.pcd \
-  local_target_distance:=3.0 \
-  lidar_model:=mid360
+ros2 bag record -o odom_motion_test \
+  /livox/lidar /livox/imu /Odometry /leg_odom \
+  /fast_anchor/fusion/fast_lio_base_odom \
+  /fast_anchor/fusion/filtered_base_odom \
+  /fast_anchor/fusion/fused_body_odom \
+  /fast_anchor/odom /fast_anchor/status /fast_anchor/icp_result /tf /tf_static
 ```
 
-同一命令的一行形式：
+建议运动模式：
+
+```text
+静止 10 秒 -> 直走一小段 -> 原地转向 -> 回到起点附近 -> 静止 10 秒
+```
+
+## 11. 常见问题
+
+只看到 `/parameter_events` 和 `/rosout`：
+
+- 确认已经 `source setup.bash` 和 `source install/setup.bash`。
+- 确认 CycloneDDS 使用的是连接 Go2 的网卡。
+- 确认本机和 Go2 能互相 ping 通。
+
+`/leg_odom` 没有数据：
 
 ```bash
-ros2 launch navigation_bringup navigation_system.launch.py   map_pcd_path:=$PWD/maps/map_preprocessed2.pcd   local_target_distance:=3.0 lidar_model:=mid360 lio_backend:=yifanlio
+ros2 topic hz /lf/sportmodestate
+ros2 topic echo --once /lf/sportmodestate
 ```
 
+如果 `/lf/sportmodestate` 有数据但 `/leg_odom` 没数据，检查：
 
-ros2 launch navigation_bringup navigation_system.launch.py \
-  map_pcd_path:=$PWD/maps/map_preprocessed2.pcd \
-  runtime_log_map_target_rate_hz:=10.0 \
-  runtime_log_report_interval_sec:=5.0 \
-  runtime_log_csv_path:=/tmp/navigation-runtime.csv
+```text
+src/navigation_bringup/config/navigation_system.yaml
+```
 
-停止导航
-  ros2 service call /scan_planner/set_navigation_enabled std_srvs/srv/SetBool "{data: false}"
-启动导航
-  ros2 service call /scan_planner/set_navigation_enabled std_srvs/srv/SetBool "{data: true}"
+确认：
+
+```yaml
+unitree_sportmode_to_odom:
+  ros__parameters:
+    drop_on_error: false
+```
+
+`/fast_anchor/odom` 没有数据：
+
+- 先确认 `/Odometry` 和 `/fast_anchor/fusion/fused_body_odom` 有数据。
+- 再给 `/initialpose` 初值。
+- 查看 `/fast_anchor/status` 当前状态。
+
+ICP 一直失败：
+
+- 检查地图是否和现场一致。
+- 检查初值是否离真实位置太远。
+- 检查 `cloud_preprocess.min_range`、自机过滤盒和地图点云是否过稀。
+
+规划有路径但机器不动：
+
+```bash
+ros2 topic hz /planned_path
+ros2 topic hz /scan_planner/initial_path
+ros2 topic hz /planning/bspline
+ros2 topic hz /cmd_vel
+```
+
+如果 `/cmd_vel` 有数据但机器不动，继续检查 Unitree 控制桥和机器狗运动模式。
+
+## 12. 推荐 commit message
+
+本次定位融合和 README 一起提交时推荐：
+
+```bash
+git add .
+git commit -m "增强里程计融合稳定性并完善导航使用文档"
+```
+
+如果只提交代码，不包含 README：
+
+```bash
+git commit -m "增强FAST-LIO2里程计健康检查与ICP修正门控"
+```
+
+如果只提交 README：
+
+```bash
+git commit -m "完善导航系统使用说明"
+```

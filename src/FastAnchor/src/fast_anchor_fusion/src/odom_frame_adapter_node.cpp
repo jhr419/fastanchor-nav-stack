@@ -2,6 +2,9 @@
 #include <cmath>
 #include <cstdint>
 #include <functional>
+#include <iterator>
+#include <limits>
+#include <map>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -66,6 +69,17 @@ void floorCovarianceDiagonal(std::array<double, 36> & covariance, const double m
   }
 }
 
+double yawFromAffine(const Eigen::Affine3d & pose)
+{
+  const auto rotation = pose.rotation();
+  return std::atan2(rotation(1, 0), rotation(0, 0));
+}
+
+double normalizeAngle(const double angle)
+{
+  return std::atan2(std::sin(angle), std::cos(angle));
+}
+
 class OdomFrameAdapterNode : public rclcpp::Node
 {
 public:
@@ -82,6 +96,8 @@ public:
       "topics.filtered_base_odom", "/fast_anchor/fusion/filtered_base_odom");
     fused_body_topic_ = declare_parameter<std::string>(
       "topics.fused_body_odom", "/fast_anchor/fusion/fused_body_odom");
+    leg_odom_topic_ =
+      declare_parameter<std::string>("topics.leg_odom", "/leg_odom");
 
     const auto base_to_body_xyz = parameterVectorToArray(
       declare_parameter<std::vector<double>>("base_to_body_xyz", {0.0, 0.0, 0.0}),
@@ -112,6 +128,31 @@ public:
       declare_parameter<double>("health_check.unhealthy_twist_covariance", 1000.0);
     min_dt_for_speed_check_s_ =
       declare_parameter<double>("health_check.min_dt_for_speed_check_s", 0.02);
+    consistency_check_enabled_ =
+      declare_parameter<bool>("consistency_check.enabled", true);
+    leg_match_tolerance_s_ =
+      declare_parameter<double>("consistency_check.leg_match_tolerance_s", 0.15);
+    consistency_min_interval_s_ =
+      declare_parameter<double>("consistency_check.min_interval_s", 0.5);
+    consistency_max_interval_s_ =
+      declare_parameter<double>("consistency_check.max_interval_s", 2.0);
+    max_increment_translation_error_m_ =
+      declare_parameter<double>("consistency_check.max_translation_error_m", 0.35);
+    max_increment_yaw_error_rad_ =
+      declare_parameter<double>("consistency_check.max_yaw_error_rad", 0.35);
+    stationary_leg_motion_threshold_m_ =
+      declare_parameter<double>("consistency_check.stationary_leg_motion_threshold_m", 0.05);
+    max_lio_motion_when_leg_stationary_m_ =
+      declare_parameter<double>("consistency_check.max_lio_motion_when_leg_stationary_m", 0.18);
+    min_distance_for_ratio_check_m_ =
+      declare_parameter<double>("consistency_check.min_distance_for_ratio_check_m", 0.08);
+    max_increment_distance_ratio_ =
+      declare_parameter<double>("consistency_check.max_distance_ratio", 3.0);
+    leg_history_size_ =
+      declare_parameter<int>("consistency_check.leg_history_size", 200);
+    if (leg_history_size_ < 2) {
+      throw std::runtime_error("consistency_check.leg_history_size must be at least 2");
+    }
 
     fast_lio_base_pub_ =
       create_publisher<nav_msgs::msg::Odometry>(fast_lio_base_topic_, rclcpp::QoS(50));
@@ -123,12 +164,16 @@ public:
     filtered_base_sub_ = create_subscription<nav_msgs::msg::Odometry>(
       filtered_base_topic_, rclcpp::QoS(50),
       std::bind(&OdomFrameAdapterNode::filteredBaseCallback, this, std::placeholders::_1));
+    leg_odom_sub_ = create_subscription<nav_msgs::msg::Odometry>(
+      leg_odom_topic_, rclcpp::QoS(50),
+      std::bind(&OdomFrameAdapterNode::legOdomCallback, this, std::placeholders::_1));
 
     RCLCPP_INFO(
       get_logger(),
-      "Odometry adapter ready: %s (%s) -> %s (%s), EKF %s (%s) -> %s (%s)",
+      "Odometry adapter ready: %s (%s) -> %s (%s), leg=%s, EKF %s (%s) -> %s (%s)",
       raw_fast_lio_topic_.c_str(), body_frame_.c_str(),
       fast_lio_base_topic_.c_str(), base_frame_.c_str(),
+      leg_odom_topic_.c_str(),
       filtered_base_topic_.c_str(), base_frame_.c_str(),
       fused_body_topic_.c_str(), body_frame_.c_str());
   }
@@ -161,6 +206,21 @@ private:
     }
     fused_body_pub_->publish(
       transformOdometryChildFrame(*msg, base_to_body_, body_frame_));
+  }
+
+  void legOdomCallback(const nav_msgs::msg::Odometry::SharedPtr msg)
+  {
+    if (!isFinitePose(*msg)) {
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 1000,
+        "Ignoring non-finite leg odometry sample.");
+      return;
+    }
+    const int64_t stamp_ns = stampNanoseconds(msg->header.stamp);
+    leg_history_[stamp_ns] = poseToAffine(msg->pose.pose);
+    while (static_cast<int>(leg_history_.size()) > leg_history_size_) {
+      leg_history_.erase(leg_history_.begin());
+    }
   }
 
   bool markFastLioHealth(nav_msgs::msg::Odometry & odometry)
@@ -201,6 +261,9 @@ private:
         }
       }
     }
+    if (healthy && !markIncrementConsistency(current_stamp_ns, current_pose, reason)) {
+      healthy = false;
+    }
 
     if (healthy) {
       last_fast_lio_pose_ = current_pose;
@@ -218,16 +281,140 @@ private:
     return false;
   }
 
+  bool markIncrementConsistency(
+    const int64_t lio_stamp_ns,
+    const Eigen::Affine3d & current_lio_pose,
+    std::string & reason)
+  {
+    if (!consistency_check_enabled_) {
+      return true;
+    }
+
+    Eigen::Affine3d current_leg_pose;
+    if (!findLegPose(lio_stamp_ns, current_leg_pose)) {
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 3000,
+        "No leg odometry sample matches FAST-LIO stamp within %.0f ms; skip increment consistency check.",
+        leg_match_tolerance_s_ * 1000.0);
+      return true;
+    }
+
+    if (!have_increment_anchor_) {
+      resetIncrementAnchor(lio_stamp_ns, current_lio_pose, current_leg_pose);
+      return true;
+    }
+
+    const double interval_s =
+      static_cast<double>(lio_stamp_ns - anchor_stamp_ns_) * 1.0e-9;
+    if (interval_s < 0.0) {
+      resetIncrementAnchor(lio_stamp_ns, current_lio_pose, current_leg_pose);
+      return true;
+    }
+    if (interval_s < consistency_min_interval_s_) {
+      return true;
+    }
+    if (interval_s > consistency_max_interval_s_) {
+      resetIncrementAnchor(lio_stamp_ns, current_lio_pose, current_leg_pose);
+      return true;
+    }
+
+    const Eigen::Affine3d lio_delta = anchor_lio_pose_.inverse() * current_lio_pose;
+    const Eigen::Affine3d leg_delta = anchor_leg_pose_.inverse() * current_leg_pose;
+    const double lio_distance = lio_delta.translation().norm();
+    const double leg_distance = leg_delta.translation().norm();
+    const double translation_error = std::abs(lio_distance - leg_distance);
+    const double yaw_error =
+      std::abs(normalizeAngle(yawFromAffine(lio_delta) - yawFromAffine(leg_delta)));
+
+    resetIncrementAnchor(lio_stamp_ns, current_lio_pose, current_leg_pose);
+
+    // Unitree 认为基本静止时，FAST-LIO 不能在同一时间窗内出现明显位移。
+    if (leg_distance < stationary_leg_motion_threshold_m_ &&
+      lio_distance > max_lio_motion_when_leg_stationary_m_)
+    {
+      reason = "FAST-LIO moves while leg odometry is stationary";
+      return false;
+    }
+    if (translation_error > max_increment_translation_error_m_) {
+      reason = "FAST-LIO and leg odometry translation increments diverge";
+      return false;
+    }
+    if (lio_distance > min_distance_for_ratio_check_m_ &&
+      leg_distance > min_distance_for_ratio_check_m_)
+    {
+      const double distance_ratio = std::max(lio_distance, leg_distance) /
+        std::max(std::min(lio_distance, leg_distance), 1.0e-6);
+      if (distance_ratio > max_increment_distance_ratio_) {
+        reason = "FAST-LIO and leg odometry distance ratio diverges";
+        return false;
+      }
+    }
+    if (yaw_error > max_increment_yaw_error_rad_) {
+      reason = "FAST-LIO and leg odometry yaw increments diverge";
+      return false;
+    }
+    return true;
+  }
+
+  bool findLegPose(
+    const int64_t stamp_ns,
+    Eigen::Affine3d & pose) const
+  {
+    if (leg_history_.empty()) {
+      return false;
+    }
+
+    auto candidate = leg_history_.lower_bound(stamp_ns);
+    auto best = leg_history_.end();
+    int64_t best_abs_delta_ns = std::numeric_limits<int64_t>::max();
+    if (candidate != leg_history_.end()) {
+      best = candidate;
+      best_abs_delta_ns = std::abs(candidate->first - stamp_ns);
+    }
+    if (candidate != leg_history_.begin()) {
+      const auto previous = std::prev(candidate);
+      const int64_t previous_abs_delta_ns = std::abs(previous->first - stamp_ns);
+      if (previous_abs_delta_ns < best_abs_delta_ns) {
+        best = previous;
+        best_abs_delta_ns = previous_abs_delta_ns;
+      }
+    }
+    if (best == leg_history_.end() ||
+      static_cast<double>(best_abs_delta_ns) * 1.0e-9 > leg_match_tolerance_s_)
+    {
+      return false;
+    }
+
+    pose = best->second;
+    return true;
+  }
+
+  void resetIncrementAnchor(
+    const int64_t stamp_ns,
+    const Eigen::Affine3d & lio_pose,
+    const Eigen::Affine3d & leg_pose)
+  {
+    anchor_stamp_ns_ = stamp_ns;
+    anchor_lio_pose_ = lio_pose;
+    anchor_leg_pose_ = leg_pose;
+    have_increment_anchor_ = true;
+  }
+
   std::string body_frame_;
   std::string base_frame_;
   std::string raw_fast_lio_topic_;
   std::string fast_lio_base_topic_;
   std::string filtered_base_topic_;
   std::string fused_body_topic_;
+  std::string leg_odom_topic_;
   bool health_check_enabled_ = true;
   bool drop_unhealthy_ = false;
   bool have_last_fast_lio_ = false;
+  bool consistency_check_enabled_ = true;
+  bool have_increment_anchor_ = false;
   int64_t last_fast_lio_stamp_ns_ = 0;
+  int64_t anchor_stamp_ns_ = 0;
+  int leg_history_size_ = 200;
   double max_translation_step_m_ = 0.5;
   double max_rotation_step_rad_ = 0.6;
   double max_linear_speed_mps_ = 2.5;
@@ -237,11 +424,24 @@ private:
   double unhealthy_pose_covariance_ = 1000.0;
   double unhealthy_twist_covariance_ = 1000.0;
   double min_dt_for_speed_check_s_ = 0.02;
+  double leg_match_tolerance_s_ = 0.15;
+  double consistency_min_interval_s_ = 0.5;
+  double consistency_max_interval_s_ = 2.0;
+  double max_increment_translation_error_m_ = 0.35;
+  double max_increment_yaw_error_rad_ = 0.35;
+  double stationary_leg_motion_threshold_m_ = 0.05;
+  double max_lio_motion_when_leg_stationary_m_ = 0.18;
+  double min_distance_for_ratio_check_m_ = 0.08;
+  double max_increment_distance_ratio_ = 3.0;
   Eigen::Affine3d base_to_body_ = Eigen::Affine3d::Identity();
   Eigen::Affine3d body_to_base_ = Eigen::Affine3d::Identity();
   Eigen::Affine3d last_fast_lio_pose_ = Eigen::Affine3d::Identity();
+  Eigen::Affine3d anchor_lio_pose_ = Eigen::Affine3d::Identity();
+  Eigen::Affine3d anchor_leg_pose_ = Eigen::Affine3d::Identity();
+  std::map<int64_t, Eigen::Affine3d> leg_history_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr raw_fast_lio_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr filtered_base_sub_;
+  rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr leg_odom_sub_;
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr fast_lio_base_pub_;
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr fused_body_pub_;
 };

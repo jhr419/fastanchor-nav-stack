@@ -86,6 +86,7 @@ def _launch_odometry_fusion(context, fusion_parameters):
                     "topics.fast_lio_base_odom": fast_lio_base_odom_topic,
                     "topics.filtered_base_odom": filtered_base_odom_topic,
                     "topics.fused_body_odom": fused_body_odom_topic,
+                    "topics.leg_odom": leg_odom_topic,
                 },
             ],
         ),
