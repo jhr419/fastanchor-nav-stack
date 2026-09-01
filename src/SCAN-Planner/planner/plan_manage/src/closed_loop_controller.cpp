@@ -2,6 +2,7 @@
 #include <cmath>
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <vector>
 
 #include <Eigen/Eigen>
@@ -14,6 +15,7 @@
 #include <tf2/utils.hpp>
 
 #include "bspline_opt/uniform_bspline.h"
+#include "plan_manage/motion_constraints.hpp"
 
 namespace scan_planner
 {
@@ -22,14 +24,21 @@ class ClosedLoopController : public rclcpp::Node
 public:
   ClosedLoopController() : Node("closed_loop_controller")
   {
+    motion_constraints_.motion_model = parseMotionModel(
+        declare_parameter<std::string>("motion_model", "nonholonomic"));
+    motion_constraints_.forward_only = declare_parameter<bool>("forward_only", true);
     time_forward_ = declare_parameter<double>("time_forward", 0.8);
     heading_error_threshold_ = declare_parameter<double>("heading_error_threshold", 0.8);
     kp_pos_ = declare_parameter<double>("kp_pos", 0.8);
     kp_yaw_ = declare_parameter<double>("kp_yaw", 1.5);
-    max_vx_ = declare_parameter<double>("max_vx", 0.75);
-    max_vy_ = declare_parameter<double>("max_vy", 0.35);
+    max_vx_ = std::max(0.0, declare_parameter<double>("max_vx", 0.75));
+    max_vy_ = std::max(0.0, declare_parameter<double>("max_vy", 0.35));
     max_vyaw_ = std::min(declare_parameter<double>("max_vyaw", 1.0), kMaxVYawLimit);
+    max_vyaw_ = std::max(0.0, max_vyaw_);
     finish_dist_ = declare_parameter<double>("finish_dist", 0.15);
+    motion_constraints_.max_vx = max_vx_;
+    motion_constraints_.max_vy = max_vy_;
+    motion_constraints_.max_vyaw = max_vyaw_;
 
     bspline_sub_ = create_subscription<scan_planner_msgs::msg::Bspline>(
         "planning/bspline", 10,
@@ -42,7 +51,10 @@ public:
     cmd_timer_ = create_wall_timer(std::chrono::milliseconds(10),
                                    std::bind(&ClosedLoopController::cmdCallback, this));
     last_update_time_ = now();
-    RCLCPP_INFO(get_logger(), "Closed-loop controller ready");
+    RCLCPP_INFO(
+        get_logger(), "Closed-loop controller ready, motion_model=%s, forward_only=%s",
+        motionModelName(motion_constraints_.motion_model),
+        motion_constraints_.forward_only ? "true" : "false");
   }
 
 private:
@@ -61,12 +73,15 @@ private:
     return (norm <= max_norm || norm < 1e-6) ? value : value / norm * max_norm;
   }
 
-  double estimateDesiredYaw(double t_cur, const Eigen::Vector3d &pos_des) const
+  double estimateDesiredYaw(double t_cur, const Eigen::Vector3d &pos_des,
+                            const Eigen::Vector2d &vel_world) const
   {
     const double t_look = std::min(traj_duration_, t_cur + time_forward_);
-    Eigen::Vector3d direction = traj_[0].evaluateDeBoorT(t_look) - pos_des;
+    const Eigen::Vector3d direction_origin =
+        motion_constraints_.motion_model == MotionModel::kNonholonomic ? odom_pos_ : pos_des;
+    Eigen::Vector3d direction = traj_[0].evaluateDeBoorT(t_look) - direction_origin;
     if (direction.head<2>().squaredNorm() < 1e-4)
-      direction = traj_[1].evaluateDeBoorT(t_cur);
+      direction.head<2>() = vel_world;
     return direction.head<2>().squaredNorm() < 1e-4
         ? odom_yaw_ : std::atan2(direction.y(), direction.x());
   }
@@ -106,8 +121,9 @@ private:
     exec_time_ = 0.0;
     last_update_time_ = now();
     receive_traj_ = true;
-    RCLCPP_INFO(get_logger(), "Received trajectory %lld, duration %.3fs",
-                static_cast<long long>(traj_id_), traj_duration_);
+    RCLCPP_INFO(
+        get_logger(), "Received trajectory %lld, duration %.3fs",
+        static_cast<long long>(traj_id_), traj_duration_);
   }
 
   void odomCallback(const nav_msgs::msg::Odometry::ConstSharedPtr msg)
@@ -129,8 +145,25 @@ private:
     double dt = (current_time - last_update_time_).seconds();
     if (dt < 0.0 || dt > 0.2) dt = 0.0;
     const double t_eval = std::min(exec_time_, traj_duration_);
-    Eigen::Vector3d pos_des = traj_[0].evaluateDeBoorT(t_eval);
-    const double yaw_error = normalizeAngle(estimateDesiredYaw(t_eval, pos_des) - odom_yaw_);
+    const Eigen::Vector3d pos_des = traj_[0].evaluateDeBoorT(t_eval);
+    const Eigen::Vector3d vel_des = traj_[1].evaluateDeBoorT(t_eval);
+    const Eigen::Vector2d pos_error(pos_des.x() - odom_pos_.x(), pos_des.y() - odom_pos_.y());
+
+    if (t_eval >= traj_duration_ && pos_error.norm() < finish_dist_)
+    {
+      publishExecutionFrozen(false);
+      publishStop();
+      last_update_time_ = current_time;
+      return;
+    }
+
+    const double velocity_limit = motion_constraints_.motion_model == MotionModel::kNonholonomic
+        ? max_vx_ : std::max(max_vx_, max_vy_);
+    const Eigen::Vector2d vel_world = clampNorm(
+        Eigen::Vector2d(vel_des.x(), vel_des.y()) + kp_pos_ * pos_error,
+        velocity_limit);
+    const double yaw_error = normalizeAngle(
+        estimateDesiredYaw(t_eval, pos_des, vel_world) - odom_yaw_);
     const double yaw_command = std::clamp(kp_yaw_ * yaw_error, -max_vyaw_, max_vyaw_);
     if (std::abs(yaw_error) > heading_error_threshold_)
     {
@@ -141,23 +174,19 @@ private:
     }
 
     publishExecutionFrozen(false);
-    exec_time_ = std::min(traj_duration_, exec_time_ + dt);
-    last_update_time_ = current_time;
-    pos_des = traj_[0].evaluateDeBoorT(exec_time_);
-    const Eigen::Vector3d vel_des = traj_[1].evaluateDeBoorT(exec_time_);
-    const Eigen::Vector2d pos_error(pos_des.x() - odom_pos_.x(), pos_des.y() - odom_pos_.y());
-    const Eigen::Vector2d vel_world = clampNorm(
-        Eigen::Vector2d(vel_des.x(), vel_des.y()) + kp_pos_ * pos_error,
-        std::max(max_vx_, max_vy_));
     const double c = std::cos(odom_yaw_);
     const double s = std::sin(odom_yaw_);
+    const PlanarCommand constrained_command = constrainPlanarCommand(
+        c * vel_world.x() + s * vel_world.y(),
+        -s * vel_world.x() + c * vel_world.y(),
+        yaw_command, motion_constraints_);
     geometry_msgs::msg::Twist command;
-    command.linear.x = std::clamp(c * vel_world.x() + s * vel_world.y(), -max_vx_, max_vx_);
-    command.linear.y = std::clamp(-s * vel_world.x() + c * vel_world.y(), -max_vy_, max_vy_);
-    command.angular.z = yaw_command;
-    if (exec_time_ >= traj_duration_ && pos_error.norm() < finish_dist_)
-      command = geometry_msgs::msg::Twist();
+    command.linear.x = constrained_command.vx;
+    command.linear.y = constrained_command.vy;
+    command.angular.z = constrained_command.vyaw;
     cmd_vel_pub_->publish(command);
+    exec_time_ = std::min(traj_duration_, exec_time_ + dt);
+    last_update_time_ = current_time;
   }
 
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_pub_;
@@ -174,6 +203,7 @@ private:
   double odom_yaw_{0.0};
   double exec_time_{0.0};
   rclcpp::Time last_update_time_{0, 0, RCL_ROS_TIME};
+  MotionConstraints motion_constraints_;
   double time_forward_, heading_error_threshold_, kp_pos_, kp_yaw_;
   double max_vx_, max_vy_, max_vyaw_, finish_dist_;
 };

@@ -79,7 +79,11 @@ install(PROGRAMS scripts/keypoint_recorder.py
   DESTINATION lib/${PROJECT_NAME} OPTIONAL)
 
 if(BUILD_TESTING)
+  find_package(ament_cmake_gtest REQUIRED)
   find_package(launch_testing_ament_cmake REQUIRED)
+  ament_add_gtest(test_motion_constraints test/test_motion_constraints.cpp)
+  target_include_directories(test_motion_constraints PRIVATE include)
+  add_launch_test(test/test_closed_loop_constraints.py TIMEOUT 30)
   add_launch_test(test/test_planner_startup.py TIMEOUT 30)
   add_launch_test(test/test_waypoint_parameters.py TIMEOUT 30)
 endif()

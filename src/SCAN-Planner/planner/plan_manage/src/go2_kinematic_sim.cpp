@@ -11,6 +11,8 @@
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 #include <tf2_ros/transform_broadcaster.h>
 
+#include "plan_manage/motion_constraints.hpp"
+
 namespace scan_planner
 {
 class Go2KinematicSim : public rclcpp::Node
@@ -22,9 +24,13 @@ public:
     y_ = declare_parameter<double>("init_y", 0.0);
     z_ = declare_parameter<double>("init_z", 0.3);
     yaw_ = declare_parameter<double>("init_yaw", 0.0);
-    max_vx_ = declare_parameter<double>("max_vx", 0.75);
-    max_vy_ = declare_parameter<double>("max_vy", 0.35);
-    max_vyaw_ = std::min(declare_parameter<double>("max_vyaw", 1.0), kMaxVYawLimit);
+    motion_constraints_.motion_model = parseMotionModel(
+        declare_parameter<std::string>("motion_model", "nonholonomic"));
+    motion_constraints_.forward_only = declare_parameter<bool>("forward_only", true);
+    motion_constraints_.max_vx = std::max(0.0, declare_parameter<double>("max_vx", 0.75));
+    motion_constraints_.max_vy = std::max(0.0, declare_parameter<double>("max_vy", 0.35));
+    motion_constraints_.max_vyaw = std::clamp(
+        declare_parameter<double>("max_vyaw", 1.0), 0.0, kMaxVYawLimit);
     cmd_timeout_ = declare_parameter<double>("cmd_timeout", 0.3);
     const double sim_rate = declare_parameter<double>("sim_rate", 100.0);
     publish_tf_ = declare_parameter<bool>("publish_tf", false);
@@ -40,7 +46,10 @@ public:
     timer_ = create_wall_timer(
         std::chrono::duration<double>(1.0 / std::max(1.0, sim_rate)),
         std::bind(&Go2KinematicSim::simCallback, this));
-    RCLCPP_INFO(get_logger(), "Go2 kinematic simulator ready");
+    RCLCPP_INFO(
+        get_logger(), "Go2 kinematic simulator ready, motion_model=%s, forward_only=%s",
+        motionModelName(motion_constraints_.motion_model),
+        motion_constraints_.forward_only ? "true" : "false");
   }
 
 private:
@@ -55,9 +64,11 @@ private:
 
   void cmdCallback(const geometry_msgs::msg::Twist::ConstSharedPtr msg)
   {
-    vx_cmd_ = std::clamp(msg->linear.x, -max_vx_, max_vx_);
-    vy_cmd_ = std::clamp(msg->linear.y, -max_vy_, max_vy_);
-    vyaw_cmd_ = std::clamp(msg->angular.z, -max_vyaw_, max_vyaw_);
+    const PlanarCommand command = constrainPlanarCommand(
+        msg->linear.x, msg->linear.y, msg->angular.z, motion_constraints_);
+    vx_cmd_ = command.vx;
+    vy_cmd_ = command.vy;
+    vyaw_cmd_ = command.vyaw;
     last_cmd_time_ = now();
   }
 
@@ -118,7 +129,8 @@ private:
   double x_{0.0}, y_{0.0}, z_{0.3}, yaw_{0.0};
   double vx_cmd_{0.0}, vy_cmd_{0.0}, vyaw_cmd_{0.0};
   double vx_world_{0.0}, vy_world_{0.0};
-  double max_vx_{0.75}, max_vy_{0.35}, max_vyaw_{1.0}, cmd_timeout_{0.3};
+  double cmd_timeout_{0.3};
+  MotionConstraints motion_constraints_;
   bool publish_tf_{false};
   std::string frame_id_, child_frame_id_;
   rclcpp::Time last_cmd_time_{0, 0, RCL_ROS_TIME};
