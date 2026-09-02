@@ -90,13 +90,24 @@ NormalizedCommand convert_twist_to_longitudinal(
   {
     throw std::invalid_argument("前进和偏航摇杆上限必须位于 (0, 1]");
   }
+  if (!std::isfinite(limits.linear_deadband) || !std::isfinite(limits.angular_deadband) ||
+    limits.linear_deadband < 0.0 || limits.angular_deadband < 0.0)
+  {
+    throw std::invalid_argument("前进和偏航死区必须是有限非负数");
+  }
+
+  double selected_linear_x = std::abs(linear_x) <= limits.linear_deadband ? 0.0 : linear_x;
+  double selected_angular_z = std::abs(angular_z) <= limits.angular_deadband ? 0.0 : angular_z;
+  if (limits.exclusive_translation_rotation && selected_angular_z != 0.0) {
+    selected_linear_x = 0.0;
+  }
 
   return NormalizedCommand{
     scale_axis(
-      linear_x, limits.limit_cmd_vel_input, limits.max_linear_x,
+      selected_linear_x, limits.limit_cmd_vel_input, limits.max_linear_x,
       limits.forward_joystick_per_mps, limits.max_forward_joystick),
     scale_axis(
-      angular_z, limits.limit_cmd_vel_input, limits.max_angular_z,
+      selected_angular_z, limits.limit_cmd_vel_input, limits.max_angular_z,
       limits.yaw_joystick_per_rps, limits.max_yaw_joystick),
     0.0F};
 }

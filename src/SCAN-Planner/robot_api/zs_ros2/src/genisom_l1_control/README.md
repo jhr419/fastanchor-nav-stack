@@ -47,3 +47,11 @@ ros2 launch genisom_l1_control twist.launch.py
 - 不把 LOCK 解释成阻尼，不虚构 clear ESTOP、时间戳、协方差或电机名称。
 
 完整用户文档见 `../../docs/USER_GUIDE.md`。
+
+## Twist 运行约束
+
+- `linear.y` 不进入 SDK，官方左右移动摇杆轴始终为 `0`。
+- 默认启用 `exclusive_translation_rotation`。当 `linear.x` 和 `angular.z` 同时超过死区时，优先执行 yaw 原地转向；角速度进入死区后才执行前进或后退。
+- `cmd_vel` 超过 `cmd_vel_timeout_ms` 未更新后，节点会持续发送零速，而不是只发送一次零速。这样既能停车，也能维持官方 SDK 所需的周期通信。
+- SDK 心跳瞬时中断时，节点会在 `disconnect_grace_ms` 宽限期内持续发送零速。心跳恢复后保持原控制权但等待新的 `cmd_vel`，不会恢复中断前的速度。
+- 遥控器确实接管并使 `FunctionMode` 离开 `FM_SDK` 时，节点仍按安全策略退出，不会自动抢回控制权。

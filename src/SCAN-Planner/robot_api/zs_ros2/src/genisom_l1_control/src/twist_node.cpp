@@ -40,6 +40,7 @@ TwistNode::TwistNode(const rclcpp::NodeOptions & options)
 
   cmd_vel_timeout_ms_ = declare_parameter<int>("cmd_vel_timeout_ms", 300);
   connection_timeout_ms_ = declare_parameter<int>("connection_timeout_ms", 10000);
+  disconnect_grace_ms_ = declare_parameter<int>("disconnect_grace_ms", 10000);
   control_request_timeout_ms_ =
     declare_parameter<int>("control_request_timeout_ms", 5000);
   mode_command_timeout_ms_ = declare_parameter<int>("mode_command_timeout_ms", 8000);
@@ -50,6 +51,8 @@ TwistNode::TwistNode(const rclcpp::NodeOptions & options)
   exit_on_control_loss_ = declare_parameter<bool>("exit_on_control_loss", true);
 
   limits_.limit_cmd_vel_input = declare_parameter<bool>("limit_cmd_vel_input", false);
+  limits_.exclusive_translation_rotation =
+    declare_parameter<bool>("exclusive_translation_rotation", true);
   limits_.max_linear_x = declare_parameter<double>("max_linear_x", 0.30);
   limits_.max_angular_z = declare_parameter<double>("max_angular_z", 0.50);
   limits_.forward_joystick_per_mps =
@@ -58,11 +61,13 @@ TwistNode::TwistNode(const rclcpp::NodeOptions & options)
     declare_parameter<double>("yaw_joystick_per_rps", 0.5);
   limits_.max_forward_joystick = declare_parameter<double>("max_forward_joystick", 1.0);
   limits_.max_yaw_joystick = declare_parameter<double>("max_yaw_joystick", 1.0);
+  limits_.linear_deadband = declare_parameter<double>("linear_deadband", 0.01);
+  limits_.angular_deadband = declare_parameter<double>("angular_deadband", 0.05);
 
   if (send_port <= 0 || send_port > 65535 || recv_port <= 0 || recv_port > 65535) {
     throw std::invalid_argument("SDK UDP 端口必须位于 1 到 65535");
   }
-  if (cmd_vel_timeout_ms_ <= 0 || connection_timeout_ms_ <= 0 ||
+  if (cmd_vel_timeout_ms_ <= 0 || connection_timeout_ms_ <= 0 || disconnect_grace_ms_ <= 0 ||
     control_request_timeout_ms_ <= 0 || mode_command_timeout_ms_ <= 0 ||
     command_retry_ms_ <= 0 || status_rate_hz_ <= 0.0)
   {
@@ -93,7 +98,8 @@ TwistNode::TwistNode(const rclcpp::NodeOptions & options)
 
   RCLCPP_INFO(
     get_logger(),
-    "Twist 控制节点已启动：将自动请求 SDK、站立并进入移动模式；仅启用 linear.x 与 angular.z");
+    "Twist 控制节点已启动：将自动请求 SDK、站立并进入移动模式；"
+    "仅启用 linear.x 与 angular.z，平移与转向互斥");
   RCLCPP_WARN(
     get_logger(),
     "此节点必须独占官方 SDK；遥控器接管后将退出且不会自动重新抢权");
@@ -123,13 +129,33 @@ void TwistNode::on_control_timer()
     connected_ = sdk_->is_connected();
     if (!connected_) {
       if (connected_once_) {
-        request_shutdown("SDK 连接丢失；不会自动重新连接或抢权", false);
+        if (!disconnected_since_) {
+          disconnected_since_ = now;
+          ready_ = false;
+          have_cmd_vel_ = false;
+          watchdog_stop_sent_ = true;
+          active_command_ = NormalizedCommand{};
+          last_error_ = "SDK 心跳暂时中断";
+          publish_ready(false);
+          RCLCPP_WARN(
+            get_logger(), "SDK 心跳暂时中断，进入 %d ms 宽限期并持续发送零速",
+            disconnect_grace_ms_);
+        }
+
+        sdk_->stop_motion();
+        const auto disconnected_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+          now - *disconnected_since_).count();
+        if (disconnected_ms >= disconnect_grace_ms_) {
+          request_shutdown("SDK 连接持续丢失且超过宽限期；不会自动重新抢权", false);
+        }
       } else if (now >= state_deadline_) {
         request_shutdown("等待 SDK 连接超时", false);
       }
       return;
     }
 
+    const bool recovered_from_disconnect = disconnected_since_.has_value();
+    disconnected_since_.reset();
     const auto owner = sdk_->function_mode();
     const auto control_mode = sdk_->control_mode();
     last_owner_ = owner;
@@ -153,6 +179,15 @@ void TwistNode::on_control_timer()
       return;
     }
 
+    if (recovered_from_disconnect) {
+      last_error_.clear();
+      if (state_ == State::ACTIVE) {
+        ready_ = true;
+        publish_ready(true);
+      }
+      RCLCPP_INFO(get_logger(), "SDK 心跳已恢复，保持当前控制权且等待新的 cmd_vel");
+    }
+
     switch (state_) {
       case State::WAIT_CONNECTION:
         enter_wait_sdk_control(now);
@@ -168,6 +203,7 @@ void TwistNode::on_control_timer()
         break;
       case State::ACTIVE:
         handle_cmd_vel_watchdog(now);
+        sdk_->send_normalized(active_command_);
         break;
       case State::SHUTTING_DOWN:
         break;
@@ -211,6 +247,7 @@ void TwistNode::begin_motion_mode_sequence(SteadyTime now, zsibot::ControlMode c
 {
   have_cmd_vel_ = false;
   watchdog_stop_sent_ = false;
+  active_command_ = NormalizedCommand{};
 
   if (control_mode == zsibot::ControlMode::CM_MOVE_MODE) {
     activate_velocity_control();
@@ -316,7 +353,15 @@ void TwistNode::on_cmd_vel(const geometry_msgs::msg::Twist::SharedPtr message)
   try {
     const auto command = convert_twist_to_longitudinal(
       message->linear.x, message->angular.z, limits_);
-    sdk_->send_normalized(command);
+    if (limits_.exclusive_translation_rotation &&
+      std::abs(message->linear.x) > limits_.linear_deadband &&
+      std::abs(message->angular.z) > limits_.angular_deadband)
+    {
+      RCLCPP_DEBUG_THROTTLE(
+        get_logger(), *get_clock(), 2000,
+        "收到平移和转向组合命令，已按 yaw 优先规则抑制 linear.x");
+    }
+    active_command_ = command;
     last_cmd_vel_at_ = std::chrono::steady_clock::now();
     have_cmd_vel_ = true;
     watchdog_stop_sent_ = false;
@@ -335,7 +380,7 @@ void TwistNode::handle_cmd_vel_watchdog(SteadyTime now)
   if (age <= cmd_vel_timeout_ms_) {
     return;
   }
-  sdk_->stop_motion();
+  active_command_ = NormalizedCommand{};
   have_cmd_vel_ = false;
   watchdog_stop_sent_ = true;
   RCLCPP_WARN(get_logger(), "cmd_vel 超过 %d ms 未更新，已发送零速停车", cmd_vel_timeout_ms_);
@@ -410,6 +455,12 @@ void TwistNode::publish_status()
     key_value("linear_x_enabled", "true"),
     key_value("linear_y_enabled", "false"),
     key_value("angular_z_enabled", "true"),
+    key_value(
+      "exclusive_translation_rotation",
+      bool_name(limits_.exclusive_translation_rotation)),
+    key_value("linear_deadband", std::to_string(limits_.linear_deadband)),
+    key_value("angular_deadband", std::to_string(limits_.angular_deadband)),
+    key_value("disconnect_grace_ms", std::to_string(disconnect_grace_ms_)),
     key_value("auto_reacquire_sdk", "false"),
     key_value("exit_on_control_loss", bool_name(exit_on_control_loss_)),
     key_value("last_error", last_error_.empty() ? "none" : last_error_)};

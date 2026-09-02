@@ -23,6 +23,7 @@ struct NormalizedCommand
 struct CommandLimits
 {
   bool limit_cmd_vel_input{false};
+  bool exclusive_translation_rotation{true};
   double max_linear_x{0.10};
   double max_linear_y{0.05};
   double max_angular_z{0.20};
@@ -32,6 +33,8 @@ struct CommandLimits
   double max_forward_joystick{1.0};
   double max_lateral_joystick{1.0};
   double max_yaw_joystick{1.0};
+  double linear_deadband{0.01};
+  double angular_deadband{0.05};
 };
 
 struct RobotSnapshot

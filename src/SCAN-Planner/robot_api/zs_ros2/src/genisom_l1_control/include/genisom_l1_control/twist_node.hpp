@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 
 #include "diagnostic_msgs/msg/diagnostic_status.hpp"
@@ -72,6 +73,7 @@ private:
   bool exit_on_control_loss_{true};
   int cmd_vel_timeout_ms_{300};
   int connection_timeout_ms_{10000};
+  int disconnect_grace_ms_{10000};
   int control_request_timeout_ms_{5000};
   int mode_command_timeout_ms_{8000};
   int command_retry_ms_{500};
@@ -83,6 +85,8 @@ private:
   SteadyTime state_deadline_{};
   SteadyTime last_command_sent_at_{};
   SteadyTime last_cmd_vel_at_{};
+  std::optional<SteadyTime> disconnected_since_;
+  NormalizedCommand active_command_;
   std::string last_error_;
 };
 

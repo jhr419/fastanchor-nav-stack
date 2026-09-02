@@ -7,6 +7,7 @@ genisom_twist_control:
     cmd_vel_topic: "/cmd_vel"
     cmd_vel_timeout_ms: 300
     connection_timeout_ms: 10000
+    disconnect_grace_ms: 10000
     control_request_timeout_ms: 5000
     mode_command_timeout_ms: 8000
     command_retry_ms: 500
@@ -23,6 +24,11 @@ genisom_twist_control:
     limit_cmd_vel_input: false
     max_linear_x: 0.30
     max_angular_z: 0.50
+
+    # 同时收到平移与转向时优先原地转向，进入角速度死区后才执行前进或后退。
+    exclusive_translation_rotation: true
+    linear_deadband: 0.01
+    angular_deadband: 0.05
 
     # 归一化摇杆值 = ROS 速度 × 标定增益。
     forward_joystick_per_mps: 1.0

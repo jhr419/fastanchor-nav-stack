@@ -26,7 +26,13 @@ public:
   {
     motion_constraints_.motion_model = parseMotionModel(
         declare_parameter<std::string>("motion_model", "nonholonomic"));
-    motion_constraints_.forward_only = declare_parameter<bool>("forward_only", true);
+    motion_constraints_.forward_only = declare_parameter<bool>("forward_only", false);
+    motion_constraints_.exclusive_translation_rotation =
+        declare_parameter<bool>("exclusive_translation_rotation", true);
+    motion_constraints_.linear_deadband =
+        std::max(0.0, declare_parameter<double>("linear_deadband", 0.01));
+    motion_constraints_.angular_deadband =
+        std::max(0.0, declare_parameter<double>("angular_deadband", 0.05));
     time_forward_ = declare_parameter<double>("time_forward", 0.8);
     heading_error_threshold_ = declare_parameter<double>("heading_error_threshold", 0.8);
     kp_pos_ = declare_parameter<double>("kp_pos", 0.8);

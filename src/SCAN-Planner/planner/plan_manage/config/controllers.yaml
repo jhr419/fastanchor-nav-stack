@@ -2,7 +2,10 @@ closed_loop_controller:
   ros__parameters:
     use_sim_time: false
     motion_model: nonholonomic
-    forward_only: true
+    forward_only: false
+    exclusive_translation_rotation: true
+    linear_deadband: 0.01
+    angular_deadband: 0.05
     time_forward: 0.8
     heading_error_threshold: 0.5
     kp_pos: 0.8
@@ -33,7 +36,10 @@ go2_kinematic_sim:
     init_z: 0.3
     init_yaw: 0.0
     motion_model: nonholonomic
-    forward_only: true
+    forward_only: false
+    exclusive_translation_rotation: true
+    linear_deadband: 0.01
+    angular_deadband: 0.05
     max_vx: 0.75
     max_vy: 0.0
     max_vyaw: 1.0

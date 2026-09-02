@@ -99,6 +99,10 @@ class TestClosedLoopConstraints(unittest.TestCase):
                 self.assertEqual(command.angular.x, 0.0)
                 self.assertEqual(command.angular.y, 0.0)
                 self.assertLessEqual(abs(command.angular.z), 1.0)
+                self.assertFalse(
+                    abs(command.linear.x) > 1.0e-9
+                    and abs(command.angular.z) > 1.0e-9
+                )
 
             commands.clear()
             cancel = Bspline()

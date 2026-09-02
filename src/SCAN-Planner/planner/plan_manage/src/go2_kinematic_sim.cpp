@@ -26,7 +26,13 @@ public:
     yaw_ = declare_parameter<double>("init_yaw", 0.0);
     motion_constraints_.motion_model = parseMotionModel(
         declare_parameter<std::string>("motion_model", "nonholonomic"));
-    motion_constraints_.forward_only = declare_parameter<bool>("forward_only", true);
+    motion_constraints_.forward_only = declare_parameter<bool>("forward_only", false);
+    motion_constraints_.exclusive_translation_rotation =
+        declare_parameter<bool>("exclusive_translation_rotation", true);
+    motion_constraints_.linear_deadband =
+        std::max(0.0, declare_parameter<double>("linear_deadband", 0.01));
+    motion_constraints_.angular_deadband =
+        std::max(0.0, declare_parameter<double>("angular_deadband", 0.05));
     motion_constraints_.max_vx = std::max(0.0, declare_parameter<double>("max_vx", 0.75));
     motion_constraints_.max_vy = std::max(0.0, declare_parameter<double>("max_vy", 0.35));
     motion_constraints_.max_vyaw = std::clamp(
