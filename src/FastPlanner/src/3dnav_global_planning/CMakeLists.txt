@@ -22,12 +22,13 @@ find_package(tf2_geometry_msgs REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(visualization_msgs REQUIRED)
 
-add_executable(astar_global_planner_node src/astar_global_planner_node.cpp)
-target_include_directories(astar_global_planner_node PRIVATE
+add_executable(astar_global_planner_main src/astar_global_planner_main.cpp src/astar_global_planner_node.cpp)
+
+target_include_directories(astar_global_planner_main PRIVATE
   ${EIGEN3_INCLUDE_DIRS}
   ${PCL_INCLUDE_DIRS}
 )
-ament_target_dependencies(astar_global_planner_node
+ament_target_dependencies(astar_global_planner_main
   geometry_msgs
   nav_msgs
   rclcpp
@@ -38,13 +39,13 @@ ament_target_dependencies(astar_global_planner_node
   tf2_ros
   visualization_msgs
 )
-target_link_libraries(astar_global_planner_node
+target_link_libraries(astar_global_planner_main
   octomap
   ${PCL_LIBRARIES}
 )
 
 install(TARGETS
-  astar_global_planner_node
+  astar_global_planner_main
   DESTINATION lib/${PROJECT_NAME}
 )
 

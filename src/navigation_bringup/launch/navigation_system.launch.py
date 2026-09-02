@@ -218,7 +218,8 @@ def generate_launch_description():
         ),
         Node(
             package="nav3d_global_planning",
-            executable="astar_global_planner_node",
+            executable="astar_global_planner_main",
+            # executable="waypoints_publisher_main",
             name="astar_global_planner_node",
             output="screen",
             parameters=[
