@@ -100,8 +100,38 @@ private:
     execution_frozen_pub_->publish(msg);
   }
 
+  void invalidateTrajectory(const std::string &reason)
+  {
+    const bool had_active_trajectory = receive_traj_;
+    receive_traj_ = false;
+    traj_.clear();
+    traj_duration_ = 0.0;
+    traj_id_ = 0;
+    exec_time_ = 0.0;
+    hold_final_position_ = false;
+    last_update_time_ = now();
+    publishExecutionFrozen(false);
+    publishStop();
+
+    if (had_active_trajectory)
+      RCLCPP_INFO(get_logger(), "Trajectory invalidated: %s", reason.c_str());
+  }
+
   void bsplineCallback(const scan_planner_msgs::msg::Bspline::ConstSharedPtr msg)
   {
+    if (msg->command == scan_planner_msgs::msg::Bspline::CANCEL)
+    {
+      invalidateTrajectory("cancel command received");
+      return;
+    }
+    if (msg->command != scan_planner_msgs::msg::Bspline::EXECUTE &&
+        msg->command != scan_planner_msgs::msg::Bspline::HOLD)
+    {
+      RCLCPP_WARN(
+          get_logger(), "Ignoring unsupported B-spline command %u",
+          static_cast<unsigned int>(msg->command));
+      return;
+    }
     if (msg->pos_pts.empty() || msg->knots.empty() || msg->order <= 0)
     {
       RCLCPP_WARN(get_logger(), "Ignoring invalid B-spline");
@@ -119,6 +149,7 @@ private:
     traj_duration_ = traj_[0].getTimeSum();
     traj_id_ = msg->traj_id;
     exec_time_ = 0.0;
+    hold_final_position_ = msg->command == scan_planner_msgs::msg::Bspline::HOLD;
     last_update_time_ = now();
     receive_traj_ = true;
     RCLCPP_INFO(
@@ -151,9 +182,14 @@ private:
 
     if (t_eval >= traj_duration_ && pos_error.norm() < finish_dist_)
     {
-      publishExecutionFrozen(false);
-      publishStop();
-      last_update_time_ = current_time;
+      if (hold_final_position_)
+      {
+        publishExecutionFrozen(false);
+        publishStop();
+        last_update_time_ = current_time;
+        return;
+      }
+      invalidateTrajectory("trajectory completed");
       return;
     }
 
@@ -196,6 +232,7 @@ private:
   rclcpp::TimerBase::SharedPtr cmd_timer_;
   bool receive_traj_{false};
   bool have_odom_{false};
+  bool hold_final_position_{false};
   std::vector<UniformBspline> traj_;
   double traj_duration_{0.0};
   std::int64_t traj_id_{0};

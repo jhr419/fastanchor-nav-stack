@@ -103,6 +103,7 @@ namespace scan_planner
     /* helper functions */
     bool callReboundReplan(bool flag_use_poly_init, bool flag_randomPolyTraj); // front-end and back-end method
     bool callEmergencyStop(Eigen::Vector3d stop_pos);                          // front-end and back-end method
+    void publishTrajectoryCancel();
     bool planFromCurrentTraj();
     void setStartStateFromOdomOrCurrentTraj();
 

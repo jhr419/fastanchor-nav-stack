@@ -362,10 +362,13 @@ namespace scan_planner
 
     if (request->data == navigation_enabled_)
     {
+      if (!request->data)
+        publishTrajectoryCancel();
+
       response->success = true;
       response->message = navigation_enabled_
                               ? "Navigation execution is already enabled"
-                              : "Navigation execution is already disabled";
+                              : "Navigation execution is already disabled; trajectory cancel republished";
       return;
     }
 
@@ -394,24 +397,14 @@ namespace scan_planner
       need_hover_stop_ = false;
       flag_escape_emergency_ = true;
 
-      /*
-       * Publish a stationary B-spline at the current robot position.
-       * This is the actual motion stop; changing the FSM state alone
-       * would not be sufficient because the controller may still hold
-       * the previous trajectory.
-       */
-      if (have_odom_)
-      {
-        callEmergencyStop(odom_pos_);
+      go2_execution_frozen_ = false;
+      publishTrajectoryCancel();
 
-        if (exec_state_ != INIT)
-          changeFSMExecState(WAIT_TARGET, "MISSION_CTRL");
-      }
+      if (exec_state_ != INIT)
+        changeFSMExecState(WAIT_TARGET, "MISSION_CTRL");
 
       response->success = true;
-      response->message = have_odom_
-                              ? "Navigation execution disabled and robot stop trajectory published"
-                              : "Navigation execution disabled; waiting for odometry";
+      response->message = "Navigation execution disabled and active trajectory canceled";
 
       RCLCPP_INFO(node_->get_logger(), "%s", response->message.c_str());
       return;
@@ -979,6 +972,7 @@ namespace scan_planner
 
       /* publish traj */
       scan_planner_msgs::msg::Bspline bspline;
+      bspline.command = scan_planner_msgs::msg::Bspline::EXECUTE;
       bspline.order = 3;
       bspline.start_time = info->start_time_;
       bspline.traj_id = info->traj_id_;
@@ -1009,6 +1003,15 @@ namespace scan_planner
     return plan_success;
   }
 
+  void SCANReplanFSM::publishTrajectoryCancel()
+  {
+    scan_planner_msgs::msg::Bspline bspline;
+    bspline.command = scan_planner_msgs::msg::Bspline::CANCEL;
+    bspline.start_time = node_->now();
+    bspline.traj_id = planner_manager_->local_data_.traj_id_;
+    bspline_pub_->publish(bspline);
+  }
+
   bool SCANReplanFSM::callEmergencyStop(Eigen::Vector3d stop_pos)
   {
 
@@ -1018,6 +1021,7 @@ namespace scan_planner
 
     /* publish traj */
     scan_planner_msgs::msg::Bspline bspline;
+    bspline.command = scan_planner_msgs::msg::Bspline::HOLD;
     bspline.order = 3;
     bspline.start_time = info->start_time_;
     bspline.traj_id = info->traj_id_;

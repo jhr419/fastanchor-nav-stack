@@ -63,6 +63,23 @@ private:
 
   void bsplineCallback(const scan_planner_msgs::msg::Bspline::ConstSharedPtr msg)
   {
+    if (msg->command == scan_planner_msgs::msg::Bspline::CANCEL)
+    {
+      receive_traj_ = false;
+      traj_.clear();
+      traj_duration_ = 0.0;
+      current_vel_.setZero();
+      RCLCPP_INFO(get_logger(), "Trajectory invalidated by cancel command");
+      return;
+    }
+    if (msg->command != scan_planner_msgs::msg::Bspline::EXECUTE &&
+        msg->command != scan_planner_msgs::msg::Bspline::HOLD)
+    {
+      RCLCPP_WARN(
+          get_logger(), "Ignoring unsupported B-spline command %u",
+          static_cast<unsigned int>(msg->command));
+      return;
+    }
     UniformBspline pos_traj;
     if (!parseBspline(msg, pos_traj)) return;
     traj_ = {pos_traj, pos_traj.getDerivative()};

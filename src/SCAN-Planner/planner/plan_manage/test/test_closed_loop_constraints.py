@@ -40,7 +40,7 @@ def generate_test_description():
         output="screen",
     )
     shutdown_timer = TimerAction(
-        period=7.0,
+        period=15.0,
         actions=[EmitEvent(event=Shutdown(reason="闭环控制约束测试结束"))],
     )
     return (
@@ -99,6 +99,98 @@ class TestClosedLoopConstraints(unittest.TestCase):
                 self.assertEqual(command.angular.x, 0.0)
                 self.assertEqual(command.angular.y, 0.0)
                 self.assertLessEqual(abs(command.angular.z), 1.0)
+
+            commands.clear()
+            cancel = Bspline()
+            cancel.command = Bspline.CANCEL
+            trajectory_pub.publish(cancel)
+            displaced_odom = self._make_odometry(math.pi / 4.0, -1.0, -1.0)
+            self._wait_for_command(
+                node,
+                executor,
+                odom_pub,
+                displaced_odom,
+                commands,
+                self._is_zero_command,
+            )
+
+            commands.clear()
+            self._collect_commands(
+                node,
+                executor,
+                odom_pub,
+                displaced_odom,
+                commands,
+                duration=0.3,
+            )
+            self.assertTrue(commands)
+            self.assertTrue(all(self._is_zero_command(command) for command in commands))
+
+            commands.clear()
+            resumed_trajectory = self._make_diagonal_trajectory()
+            resumed_trajectory.traj_id = 2
+            trajectory_pub.publish(resumed_trajectory)
+            self._wait_for_command(
+                node,
+                executor,
+                odom_pub,
+                self._make_odometry(0.0),
+                commands,
+                lambda command: command.angular.z > 0.05,
+            )
+
+            stationary_trajectory = self._make_stationary_trajectory()
+            trajectory_pub.publish(stationary_trajectory)
+            stationary_odom = self._make_odometry(0.0)
+            self._collect_commands(
+                node,
+                executor,
+                odom_pub,
+                stationary_odom,
+                commands,
+                duration=0.8,
+            )
+
+            commands.clear()
+            displaced_odom = self._make_odometry(0.0, -1.0, -1.0)
+            self._collect_commands(
+                node,
+                executor,
+                odom_pub,
+                displaced_odom,
+                commands,
+                duration=0.3,
+            )
+            self.assertTrue(commands)
+            self.assertTrue(all(self._is_zero_command(command) for command in commands))
+
+            hold_trajectory = self._make_stationary_trajectory()
+            hold_trajectory.command = Bspline.HOLD
+            hold_trajectory.traj_id = 4
+            trajectory_pub.publish(hold_trajectory)
+            self._collect_commands(
+                node,
+                executor,
+                odom_pub,
+                stationary_odom,
+                commands,
+                duration=0.8,
+            )
+
+            commands.clear()
+            self._wait_for_command(
+                node,
+                executor,
+                odom_pub,
+                displaced_odom,
+                commands,
+                lambda command: abs(command.angular.z) > 0.05
+                or command.linear.x > 0.05,
+            )
+
+            cancel = Bspline()
+            cancel.command = Bspline.CANCEL
+            trajectory_pub.publish(cancel)
         finally:
             executor.remove_node(node)
             executor.shutdown()
@@ -138,8 +230,35 @@ class TestClosedLoopConstraints(unittest.TestCase):
         raise AssertionError("未在超时时间内收到符合条件的速度命令")
 
     @staticmethod
+    def _collect_commands(
+        node,
+        executor,
+        odom_pub,
+        odom,
+        commands,
+        duration,
+    ):
+        deadline = time.monotonic() + duration
+        while time.monotonic() < deadline:
+            odom.header.stamp = node.get_clock().now().to_msg()
+            odom_pub.publish(odom)
+            executor.spin_once(timeout_sec=0.02)
+
+    @staticmethod
+    def _is_zero_command(command):
+        return (
+            command.linear.x == 0.0
+            and command.linear.y == 0.0
+            and command.linear.z == 0.0
+            and command.angular.x == 0.0
+            and command.angular.y == 0.0
+            and command.angular.z == 0.0
+        )
+
+    @staticmethod
     def _make_diagonal_trajectory():
         trajectory = Bspline()
+        trajectory.command = Bspline.EXECUTE
         trajectory.order = 3
         trajectory.traj_id = 1
         trajectory.knots = [
@@ -162,8 +281,17 @@ class TestClosedLoopConstraints(unittest.TestCase):
         return trajectory
 
     @staticmethod
-    def _make_odometry(yaw):
+    def _make_stationary_trajectory():
+        trajectory = TestClosedLoopConstraints._make_diagonal_trajectory()
+        trajectory.traj_id = 3
+        trajectory.pos_pts = [Point(x=0.0, y=0.0, z=0.3) for _ in range(7)]
+        return trajectory
+
+    @staticmethod
+    def _make_odometry(yaw, x=0.0, y=0.0):
         odom = Odometry()
+        odom.pose.pose.position.x = x
+        odom.pose.pose.position.y = y
         odom.pose.pose.position.z = 0.3
         odom.pose.pose.orientation.z = math.sin(yaw / 2.0)
         odom.pose.pose.orientation.w = math.cos(yaw / 2.0)

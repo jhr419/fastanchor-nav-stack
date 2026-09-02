@@ -586,9 +586,9 @@ class WaypointMissionManager(Node):
             if event.completed:
                 self._mission_success = True
                 self._mission_message = (
-                    "Waypoint mission completed"
+                    "Final waypoint reached; stopping navigation"
                 )
-                self._state = "COMPLETED"
+                self._state = "COMPLETING"
                 self._mission_done.set()
 
                 reached_index = event.reached_index
@@ -973,6 +973,25 @@ class WaypointMissionManager(Node):
             message = self._mission_message or (
                 "Mission terminated"
             )
+
+        if success:
+            stopped, stop_message = self._call_scan_and_wait(False)
+
+            if stopped:
+                message = "Waypoint mission completed"
+                with self._lock:
+                    self._state = "COMPLETED"
+                    self._mission_message = message
+            else:
+                success = False
+                message = (
+                    "Final waypoint reached, but SCAN stop failed: %s"
+                    % stop_message
+                )
+                with self._lock:
+                    self._state = "FAILED"
+                    self._mission_success = False
+                    self._mission_message = message
 
         result = FollowWaypoints.Result()
         result.success = success
