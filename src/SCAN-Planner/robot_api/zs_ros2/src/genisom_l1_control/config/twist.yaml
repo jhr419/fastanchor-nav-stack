@@ -1,0 +1,31 @@
+genisom_twist_control:
+  ros__parameters:
+    robot_ip: "192.168.168.168"
+    send_port: 8081
+    recv_port: 8080
+
+    cmd_vel_topic: "/cmd_vel"
+    cmd_vel_timeout_ms: 300
+    connection_timeout_ms: 10000
+    control_request_timeout_ms: 5000
+    mode_command_timeout_ms: 8000
+    command_retry_ms: 500
+    status_rate_hz: 5.0
+
+    # 启动后自动完成 SDK 控制权、站立和移动模式切换。
+    auto_stand: true
+    auto_move_mode: true
+
+    # 遥控器或其他控制者接管后退出节点并释放 SDK 连接，禁止自动抢权。
+    exit_on_control_loss: true
+
+    # 默认由导航器限制物理速度；SDK 末端仍保留官方 [-1, 1] 协议边界。
+    limit_cmd_vel_input: false
+    max_linear_x: 0.30
+    max_angular_z: 0.50
+
+    # 归一化摇杆值 = ROS 速度 × 标定增益。
+    forward_joystick_per_mps: 1.0
+    yaw_joystick_per_rps: 0.5
+    max_forward_joystick: 1.0
+    max_yaw_joystick: 1.0

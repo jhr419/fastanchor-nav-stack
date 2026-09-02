@@ -1,0 +1,41 @@
+genisom_manager:
+  ros__parameters:
+    robot_ip: "192.168.168.168"
+    send_port: 8081
+    recv_port: 8080
+
+    cmd_vel_topic: "/cmd_vel"
+    joint_states_topic: "/joint_states"
+    cmd_vel_timeout_ms: 300
+    mode_switch_timeout_ms: 2000
+
+    telemetry_rate_hz: 20.0
+    status_rate_hz: 5.0
+    imu_frame_id: "imu_link"
+    odom_frame_id: "odom"
+    base_frame_id: "base_link"
+
+    publish_imu: true
+    publish_odom: true
+    publish_joint_states: true
+    publish_battery: true
+    publish_velocity: true
+    publish_motor_temperatures: true
+    publish_diagnostics: true
+
+    # 默认由导航器/规划器限制物理速度；设为 true 可启用 Manager 末端物理限幅。
+    limit_cmd_vel_input: false
+    # 仅当 limit_cmd_vel_input=true 时使用以下三个上限。
+    max_linear_x: 0.10
+    max_linear_y: 0.05
+    max_angular_z: 0.20
+
+    # 单位换算：归一化摇杆值 = ROS 速度 × 对应标定增益。
+    forward_joystick_per_mps: 1.0
+    lateral_joystick_per_mps: 2.0
+    yaw_joystick_per_rps: 0.5
+
+    # 官方 SetRemote 的协议范围为 [-1, 1]，这里仅保留协议边界。
+    max_forward_joystick: 1.0
+    max_lateral_joystick: 1.0
+    max_yaw_joystick: 1.0
