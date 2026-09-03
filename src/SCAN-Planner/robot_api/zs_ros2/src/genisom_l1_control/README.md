@@ -1,7 +1,8 @@
 # genisom_l1_control
 
-ROS2 Humble C++ 包，提供完整 `genisom_manager_node` 和精简 `genisom_twist_node` 两个互斥部署目标。
-任一时刻只能运行其中一个节点并持有 GENISOM 官方 `ZsibotExecutor`。
+ROS2 Humble C++ 包，提供完整 `genisom_manager_node` 和精简 `genisom_twist_node` 两个部署目标。
+Manager 仍使用新版 `ZsibotExecutor` 承担遥测、控制权和服务；Twist 控制使用旧版 ZSL-1W
+`HighLevel::move(vx, vy, yaw_rate)` 直接下发 `/cmd_vel` 物理速度。
 
 ## 构建与启动
 
@@ -14,7 +15,7 @@ source install/setup.bash
 ros2 launch genisom_l1_control manager.launch.py
 ```
 
-只需要自动进入 SDK 并接收 `/cmd_vel` 时：
+只需要接收 `/cmd_vel` 并直接控制 ZSL-1W 运动时：
 
 ```bash
 ros2 launch genisom_l1_control twist.launch.py
@@ -25,11 +26,12 @@ ros2 launch genisom_l1_control twist.launch.py
 | 组件 | 说明 |
 |---|---|
 | `ManagerNode` | ROS service/topic/parameter、安全状态机和数据转换 |
-| `SdkWrapper` | 唯一官方 SDK 实例、调用串行化、型号策略 |
+| `SdkWrapper` | Manager 的新版 SDK 实例、调用串行化和型号策略 |
+| `HighLevelVelocityClient` | Twist 的旧版 ZSL-1W highlevel 速度客户端 |
 | `ProcessSupervisor` | 官方 SDK 构造卡死时保证 Ctrl+C 可回收 |
 | `manager.yaml` | 网络、频率、发布开关、frame、速度映射和可选限幅 |
-| `TwistNode` | 自动进入 SDK、只执行前后/偏航速度、处理遥控器接管 |
-| `twist.yaml` | Twist 控制权、模式切换、看门狗和轴映射配置 |
+| `TwistNode` | 通过旧版 highlevel 直接执行 `/cmd_vel` 的 x/y/yaw 速度 |
+| `twist.yaml` | Twist highlevel 网络、站立流程和速度限幅配置 |
 | `manager.launch.py` | 正式启动入口 |
 | `twist.launch.py` | 独立 Twist 控制入口 |
 | `control.launch.py` | 兼容旧启动命令，仍启动 Manager |
@@ -39,10 +41,10 @@ ros2 launch genisom_l1_control twist.launch.py
 - 使用 C++20，与官方根 CMake 的真实配置一致；
 - 注释使用中文，项目路径使用相对路径；
 - 不修改 `third_party/genisom_L1_sdk`；
-- Manager 与 Twist 节点不能同时运行，整个部署始终只有一份 SDK 实例；
-- 所有 SDK 调用必须经过 `SdkWrapper`；
-- 控制权以 `GetFunctionMode()` 反馈为准；
-- 只有 `FM_SDK` 允许速度桥；
+- Manager 的新版 SDK 调用必须经过 `SdkWrapper`；
+- Twist 的旧版 highlevel 速度调用必须经过 `HighLevelVelocityClient`；
+- Manager 控制权以 `GetFunctionMode()` 反馈为准；
+- Manager 只有 `FM_SDK` 允许速度桥；
 - 型号限制必须来自官方仓库，不猜测；
 - 不把 LOCK 解释成阻尼，不虚构 clear ESTOP、时间戳、协方差或电机名称。
 
@@ -50,8 +52,10 @@ ros2 launch genisom_l1_control twist.launch.py
 
 ## Twist 运行约束
 
-- `linear.y` 不进入 SDK，官方左右移动摇杆轴始终为 `0`。
-- 默认启用 `exclusive_translation_rotation`。当 `linear.x` 和 `angular.z` 同时超过死区时，优先执行 yaw 原地转向；角速度进入死区后才执行前进或后退。
-- `cmd_vel` 超过 `cmd_vel_timeout_ms` 未更新后，节点会持续发送零速，而不是只发送一次零速。这样既能停车，也能维持官方 SDK 所需的周期通信。
-- SDK 心跳瞬时中断时，节点会在 `disconnect_grace_ms` 宽限期内持续发送零速。心跳恢复后保持原控制权但等待新的 `cmd_vel`，不会恢复中断前的速度。
-- 遥控器确实接管并使 `FunctionMode` 离开 `FM_SDK` 时，节点仍按安全策略退出，不会自动抢回控制权。
+- Twist 使用 `third_party/genisom_l1_sdk_old` 中的旧版 ZSL-1W highlevel 动态库。
+- 机器人端 `/opt/export/config/sdk_config.yaml` 的 `target_ip/target_port` 必须与 `local_ip/local_port` 一致。
+- 收到一条 `/cmd_vel` 立即调用一次 `HighLevel::move(linear.x, linear.y, angular.z)`。
+- 不再把 ROS 速度乘摇杆增益，不再使用 `SetRemote()` 发送速度。
+- `linear.x`、`linear.y` 和 `angular.z` 同时可用，不做 yaw 优先或 x/yaw 互斥。
+- 不再固定频率持续发送速度或零速，也不再启用 300 ms 超时清零看门狗。
+- 旧版 highlevel 接口没有新版 `FunctionMode` 反馈，Twist 状态不再报告遥控器接管确认。

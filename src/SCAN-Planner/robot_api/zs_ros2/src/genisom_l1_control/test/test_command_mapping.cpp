@@ -1,5 +1,6 @@
 #include <limits>
 
+#include "genisom_l1_control/highlevel_velocity_client.hpp"
 #include "genisom_l1_control/sdk_wrapper.hpp"
 #include "gtest/gtest.h"
 
@@ -80,62 +81,51 @@ TEST(CommandMapping, RejectsInvalidCalibrationGain)
   EXPECT_THROW(convert_twist_to_normalized(0.0, 0.0, 0.0, limits), std::invalid_argument);
 }
 
-TEST(TwistCommandMapping, YawTakesPriorityAndLateralMotionStaysDisabled)
+TEST(TwistCommandMapping, PassesPhysicalVelocityWithoutYawPriority)
 {
-  CommandLimits limits;
-  limits.forward_joystick_per_mps = 0.5;
-  limits.yaw_joystick_per_rps = 0.2;
-  limits.lateral_joystick_per_mps = std::numeric_limits<double>::quiet_NaN();
-  limits.max_lateral_joystick = std::numeric_limits<double>::quiet_NaN();
+  VelocityLimits limits;
 
-  const auto command = convert_twist_to_longitudinal(0.6, -0.5, limits);
+  const auto command = convert_twist_to_velocity(0.6, -0.2, -0.5, limits);
 
-  EXPECT_FLOAT_EQ(command.forward, 0.0F);
-  EXPECT_FLOAT_EQ(command.yaw, -0.10F);
-  EXPECT_FLOAT_EQ(command.lateral, 0.0F);
+  EXPECT_FLOAT_EQ(command.linear_x, 0.6F);
+  EXPECT_FLOAT_EQ(command.linear_y, -0.2F);
+  EXPECT_FLOAT_EQ(command.angular_z, -0.5F);
 }
 
-TEST(TwistCommandMapping, AllowsForwardAndReverseAfterYawEntersDeadband)
+TEST(TwistCommandMapping, AppliesDeadbandsPerAxisWithoutMutualExclusion)
 {
-  CommandLimits limits;
-  limits.forward_joystick_per_mps = 0.5;
-  limits.yaw_joystick_per_rps = 0.2;
+  VelocityLimits limits;
+  limits.linear_deadband = 0.05;
   limits.angular_deadband = 0.05;
 
-  const auto forward = convert_twist_to_longitudinal(0.6, 0.04, limits);
-  const auto reverse = convert_twist_to_longitudinal(-0.6, -0.04, limits);
+  const auto command = convert_twist_to_velocity(0.6, 0.04, -0.5, limits);
 
-  EXPECT_FLOAT_EQ(forward.forward, 0.30F);
-  EXPECT_FLOAT_EQ(forward.yaw, 0.0F);
-  EXPECT_FLOAT_EQ(forward.lateral, 0.0F);
-  EXPECT_FLOAT_EQ(reverse.forward, -0.30F);
-  EXPECT_FLOAT_EQ(reverse.yaw, 0.0F);
-  EXPECT_FLOAT_EQ(reverse.lateral, 0.0F);
+  EXPECT_FLOAT_EQ(command.linear_x, 0.6F);
+  EXPECT_FLOAT_EQ(command.linear_y, 0.0F);
+  EXPECT_FLOAT_EQ(command.angular_z, -0.5F);
 }
 
-TEST(TwistCommandMapping, ClampsOnlyEnabledAxes)
+TEST(TwistCommandMapping, ClampsPhysicalVelocityLimits)
 {
-  CommandLimits limits;
+  VelocityLimits limits;
   limits.limit_cmd_vel_input = true;
   limits.max_linear_x = 0.2;
+  limits.max_linear_y = 0.3;
   limits.max_angular_z = 0.4;
-  limits.max_forward_joystick = 0.15;
-  limits.max_yaw_joystick = 0.10;
-  limits.exclusive_translation_rotation = false;
 
-  const auto command = convert_twist_to_longitudinal(100.0, -100.0, limits);
+  const auto command = convert_twist_to_velocity(100.0, -100.0, -100.0, limits);
 
-  EXPECT_FLOAT_EQ(command.forward, 0.15F);
-  EXPECT_FLOAT_EQ(command.yaw, -0.10F);
-  EXPECT_FLOAT_EQ(command.lateral, 0.0F);
+  EXPECT_FLOAT_EQ(command.linear_x, 0.2F);
+  EXPECT_FLOAT_EQ(command.linear_y, -0.3F);
+  EXPECT_FLOAT_EQ(command.angular_z, -0.4F);
 }
 
 TEST(TwistCommandMapping, RejectsInvalidDeadband)
 {
-  CommandLimits limits;
+  VelocityLimits limits;
   limits.angular_deadband = -0.01;
 
-  EXPECT_THROW(convert_twist_to_longitudinal(0.0, 0.0, limits), std::invalid_argument);
+  EXPECT_THROW(convert_twist_to_velocity(0.0, 0.0, 0.0, limits), std::invalid_argument);
 }
 
 TEST(ModelPolicy, WheelModelsRejectOfficiallyUnsupportedActions)

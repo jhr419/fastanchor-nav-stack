@@ -22,6 +22,9 @@ find_package(Threads REQUIRED)
 
 set(GENISOM_SDK_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/genisom_L1_sdk"
   CACHE PATH "genisom_L1_sdk 根目录")
+set(GENISOM_HIGHLEVEL_SDK_ROOT
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/genisom_l1_sdk_old"
+  CACHE PATH "旧版 genisom_l1_sdk_old 根目录")
 
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64")
   set(GENISOM_SDK_ARCH "aarch64")
@@ -39,17 +42,39 @@ endif()
 if(NOT EXISTS "${GENISOM_SDK_LIBRARY}")
   message(FATAL_ERROR "未找到 GENISOM SDK 静态库: ${GENISOM_SDK_LIBRARY}")
 endif()
+set(GENISOM_HIGHLEVEL_LIBRARY_DIR
+  "${GENISOM_HIGHLEVEL_SDK_ROOT}/lib/zsl-1w/${GENISOM_SDK_ARCH}")
+set(GENISOM_HIGHLEVEL_LIBRARY
+  "${GENISOM_HIGHLEVEL_LIBRARY_DIR}/libmc_sdk_zsl_1w_${GENISOM_SDK_ARCH}.so")
+if(NOT EXISTS "${GENISOM_HIGHLEVEL_SDK_ROOT}/include/zsl-1w/highlevel.h")
+  message(FATAL_ERROR "未找到旧版 GENISOM highlevel 头文件: ${GENISOM_HIGHLEVEL_SDK_ROOT}")
+endif()
+if(NOT EXISTS "${GENISOM_HIGHLEVEL_LIBRARY}")
+  message(FATAL_ERROR "未找到旧版 GENISOM highlevel 动态库: ${GENISOM_HIGHLEVEL_LIBRARY}")
+endif()
 
 add_library(genisom_sdk STATIC IMPORTED GLOBAL)
 set_target_properties(genisom_sdk PROPERTIES
   IMPORTED_LOCATION "${GENISOM_SDK_LIBRARY}"
   INTERFACE_INCLUDE_DIRECTORIES "${GENISOM_SDK_ROOT}/include")
 
+add_library(genisom_highlevel_sdk SHARED IMPORTED GLOBAL)
+set_target_properties(genisom_highlevel_sdk PROPERTIES
+  IMPORTED_LOCATION "${GENISOM_HIGHLEVEL_LIBRARY}"
+  INTERFACE_INCLUDE_DIRECTORIES "${GENISOM_HIGHLEVEL_SDK_ROOT}/include")
+
 add_library(genisom_sdk_wrapper src/sdk_wrapper.cpp)
 target_include_directories(genisom_sdk_wrapper PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
 target_link_libraries(genisom_sdk_wrapper PUBLIC genisom_sdk Threads::Threads)
+
+add_library(genisom_highlevel_velocity_client STATIC
+  src/highlevel_velocity_client.cpp)
+target_include_directories(genisom_highlevel_velocity_client PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>)
+target_link_libraries(genisom_highlevel_velocity_client PUBLIC genisom_highlevel_sdk)
 
 add_library(genisom_process_supervisor src/process_supervisor.cpp)
 target_include_directories(genisom_process_supervisor PUBLIC
@@ -75,7 +100,7 @@ add_executable(genisom_twist_node
   src/twist_node.cpp
   src/twist_main.cpp)
 target_link_libraries(genisom_twist_node
-  genisom_sdk_wrapper
+  genisom_highlevel_velocity_client
   genisom_process_supervisor)
 ament_target_dependencies(genisom_twist_node
   diagnostic_msgs
@@ -87,12 +112,20 @@ install(TARGETS
   genisom_manager_node
   genisom_twist_node
   RUNTIME DESTINATION lib/${PROJECT_NAME})
+install(FILES
+  "${GENISOM_HIGHLEVEL_LIBRARY}"
+  DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY config launch DESTINATION share/${PROJECT_NAME})
+
+set_target_properties(genisom_twist_node PROPERTIES
+  INSTALL_RPATH "$ORIGIN")
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
   ament_add_gtest(test_command_mapping test/test_command_mapping.cpp)
-  target_link_libraries(test_command_mapping genisom_sdk_wrapper)
+  target_link_libraries(test_command_mapping
+    genisom_sdk_wrapper
+    genisom_highlevel_velocity_client)
 
   find_package(ament_cmake_cpplint REQUIRED)
   ament_cpplint(FILTERS

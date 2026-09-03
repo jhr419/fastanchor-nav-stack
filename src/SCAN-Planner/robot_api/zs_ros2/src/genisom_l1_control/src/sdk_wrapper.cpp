@@ -68,50 +68,6 @@ NormalizedCommand convert_twist_to_normalized(
       limits.lateral_joystick_per_mps, limits.max_lateral_joystick)};
 }
 
-NormalizedCommand convert_twist_to_longitudinal(
-  double linear_x, double angular_z, const CommandLimits & limits)
-{
-  if (limits.limit_cmd_vel_input &&
-    (!std::isfinite(limits.max_linear_x) || !std::isfinite(limits.max_angular_z) ||
-    limits.max_linear_x <= 0.0 || limits.max_angular_z <= 0.0))
-  {
-    throw std::invalid_argument("启用 cmd_vel 输入限幅时，前进和偏航速度上限必须大于 0");
-  }
-  if (!std::isfinite(limits.forward_joystick_per_mps) ||
-    !std::isfinite(limits.yaw_joystick_per_rps) || limits.forward_joystick_per_mps <= 0.0 ||
-    limits.yaw_joystick_per_rps <= 0.0)
-  {
-    throw std::invalid_argument("前进和偏航摇杆标定增益必须是有限正数");
-  }
-  if (!std::isfinite(limits.max_forward_joystick) ||
-    !std::isfinite(limits.max_yaw_joystick) || limits.max_forward_joystick <= 0.0 ||
-    limits.max_forward_joystick > 1.0 || limits.max_yaw_joystick <= 0.0 ||
-    limits.max_yaw_joystick > 1.0)
-  {
-    throw std::invalid_argument("前进和偏航摇杆上限必须位于 (0, 1]");
-  }
-  if (!std::isfinite(limits.linear_deadband) || !std::isfinite(limits.angular_deadband) ||
-    limits.linear_deadband < 0.0 || limits.angular_deadband < 0.0)
-  {
-    throw std::invalid_argument("前进和偏航死区必须是有限非负数");
-  }
-
-  double selected_linear_x = std::abs(linear_x) <= limits.linear_deadband ? 0.0 : linear_x;
-  double selected_angular_z = std::abs(angular_z) <= limits.angular_deadband ? 0.0 : angular_z;
-  if (limits.exclusive_translation_rotation && selected_angular_z != 0.0) {
-    selected_linear_x = 0.0;
-  }
-
-  return NormalizedCommand{
-    scale_axis(
-      selected_linear_x, limits.limit_cmd_vel_input, limits.max_linear_x,
-      limits.forward_joystick_per_mps, limits.max_forward_joystick),
-    scale_axis(
-      selected_angular_z, limits.limit_cmd_vel_input, limits.max_angular_z,
-      limits.yaw_joystick_per_rps, limits.max_yaw_joystick),
-    0.0F};
-}
-
 bool command_supported_for_model(zsibot::CmdCode command, zsibot::Model model)
 {
   if (model == zsibot::Model::MODEL_XG) {

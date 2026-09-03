@@ -2,20 +2,21 @@
 
 ## 1. 功能定位
 
-`GENISOM L1-W ROS2 Manager` 是机器人官方 SDK 的完整 ROS2 入口。项目另提供独立 Twist 控制模式；两种
-模式互斥运行，任一时刻只允许创建一份 `zsibot::ZsibotExecutor(Role::ROLE_SDK, ...)`。
+`GENISOM L1-W ROS2 Manager` 是机器人官方 SDK 的完整 ROS2 入口。项目另提供独立 Twist 控制模式；
+Twist 参考旧版 ZSL-1W highlevel SDK，直接把 `/cmd_vel` 传给 `HighLevel::move(vx, vy, yaw_rate)`。
 
 - `REMOTE / SDK / GENERAL_SDK / ROAMERX` 控制权请求与反馈确认；
 - 站立、趴下、移动、平衡站立、锁定和官方软急停；
 - 慢速、正常、快速档位切换；
 - 官方特殊动作下发和基于 `GetModel()` 的型号屏蔽；
-- `/cmd_vel` 到 `SetRemote()` 的安全速度桥；
+- Manager 的 `/cmd_vel` 到 `SetRemote()` 安全速度桥；
+- Twist 的 `/cmd_vel` 到 `HighLevel::move()` 直接速度桥；
 - IMU、odom、关节、电池、故障、温度、型号和版本等长期发布；
 - `/genisom/status` 和 `/diagnostics` 统一状态输出；
 - 官方 SDK 构造卡死时的进程级退出保护。
 
-Nav2、键盘遥控和任务程序只能通过当前选定的 Manager 或 Twist ROS 接口控制机器人，不能直接链接
-`libzsibot.a`。Manager、Twist 和官方示例三者之间必须互斥运行。
+Nav2、键盘遥控和任务程序只能通过当前选定的 Manager 或 Twist ROS 接口控制机器人。现场运行时仍建议
+Manager、Twist 和官方示例三者之间互斥，避免多进程同时给运动控制发速度。
 
 ## 2. 官方依据与验证边界
 
@@ -36,6 +37,8 @@ f7ccbf393e96f1205af8cce8070c5886f9641428
 - `third_party/genisom_L1_sdk/include/zsibot_sdk/zsibot_define.h`
 - `third_party/genisom_L1_sdk/example/sdk_control.cpp`
 - `third_party/genisom_L1_sdk/example/remote_control.cpp`
+- `third_party/genisom_l1_sdk_old/docs/api_zsl-1w.md`
+- `third_party/genisom_l1_sdk_old/include/zsl-1w/highlevel.h`
 
 当前验证状态：
 
@@ -192,20 +195,13 @@ ros2 topic pub --rate 10 /cmd_vel geometry_msgs/msg/Twist \
   '{linear: {x: 0.02, y: 0.0, z: 0.0}, angular: {x: 0.0, y: 0.0, z: 0.1}}'
 ```
 
-该节点只读取 `linear.x` 和 `angular.z`。即使上层发送非零 `linear.y`，传给官方 `SetRemote()` 的横向摇杆
-也固定为 `0.0`；这是 SDK 下发层的硬约束，不依赖导航器配置。300 ms 内没有新速度时自动发送零速停车。
+该节点使用旧版 ZSL-1W highlevel 接口。收到一条 `/cmd_vel` 后立即调用一次
+`HighLevel::move(linear.x, linear.y, angular.z)`；不再通过 `SetRemote()`，不再乘摇杆增益，不再做 yaw
+优先或 `linear.x/angular.z` 互斥，也不再启用 300 ms 超时清零看门狗。停止发布 `/cmd_vel` 时，节点不会自行
+补发零速；上游需要停车时必须发布一条全零速度。
 
-遥控器按原厂方式长按 `L2+R2+A` 两秒后，组合键由机器人底层固件处理。官方高层 SDK 不提供遥控器按键
-接收接口，因此节点不自行判断三个按键，而是持续检查官方 `GetFunctionMode()` 反馈。一旦已确认 SDK 后反馈
-变为 `FM_REMOTE` 或其他非 SDK 模式，节点会：
-
-1. 立即禁止继续下发 `/cmd_vel`；
-2. 不发送重新申请 SDK 的命令；
-3. 发布 `ready=false` 和最终状态；
-4. 退出工作进程，关闭 SDK 心跳并释放 UDP 端口；
-5. 若官方 SDK 析构卡住，外层监督进程在 3 秒后强制回收。
-
-接管后如需重新进入 SDK，必须在人员确认安全后重新执行 `twist.launch.py`。节点不会自动抢回控制权。
+旧版 highlevel 接口没有新版 `FunctionMode` 反馈，Twist 节点不能确认遥控器接管状态。现场仍需保留原厂遥控器
+和物理急停；如需重新进入 Twist，必须在人员确认安全后重新执行 `twist.launch.py`。
 
 以下程序不得与 Twist 节点同时运行：
 
@@ -213,7 +209,7 @@ ros2 topic pub --rate 10 /cmd_vel geometry_msgs/msg/Twist \
 manager.launch.py
 control.launch.py
 官方 sdk_control / remote_control 示例
-其他占用 UDP 8080 的历史 SDK 节点
+其他占用 highlevel 本地端口的历史 SDK 节点
 ```
 
 Twist 模式只负责速度控制和自身状态，不发布 Manager 的 IMU、odom、关节、电池和故障 topic。需要完整遥测、
@@ -224,24 +220,19 @@ Twist 参数位于 `src/genisom_l1_control/config/twist.yaml`：
 | Parameter | 默认值 | 用途 |
 |---|---:|---|
 | `robot_ip` | `192.168.168.168` | Firefly 地址 |
-| `send_port` / `recv_port` | `8081` / `8080` | SDK 发送和本地接收端口 |
+| `local_ip` | `192.168.168.99` | 机器人端 `sdk_config.yaml` 的 `target_ip` |
+| `local_port` | `43988` | 机器人端 `sdk_config.yaml` 的 `target_port` |
 | `cmd_vel_topic` | `/cmd_vel` | 速度输入 topic |
-| `cmd_vel_timeout_ms` | `300` | 新速度超时后停车 |
 | `connection_timeout_ms` | `10000` | 首次连接等待时间 |
-| `control_request_timeout_ms` | `5000` | SDK 控制权确认时间 |
-| `mode_command_timeout_ms` | `8000` | 站立或移动模式确认时间 |
-| `command_retry_ms` | `500` | 控制权和模式命令重试周期 |
+| `mode_command_timeout_ms` | `8000` | 站立确认时间 |
+| `command_retry_ms` | `500` | 站立命令重试周期 |
 | `status_rate_hz` | `5.0` | Twist 状态发布频率 |
-| `auto_stand` | `true` | SDK 确认后自动站立 |
-| `auto_move_mode` | `true` | 站立确认后自动进入移动模式 |
-| `exit_on_control_loss` | `true` | 遥控器接管后退出且不重新抢权 |
+| `auto_stand` | `true` | highlevel 连接后自动站立 |
 | `limit_cmd_vel_input` | `false` | 是否启用末端物理速度限幅 |
-| `max_linear_x` / `max_angular_z` | `0.30` / `0.50` | 启用限幅后的上限 |
-| `forward_joystick_per_mps` | `1.0` | 前进速度标定增益 |
-| `yaw_joystick_per_rps` | `0.5` | 偏航速度标定增益 |
-| `max_forward_joystick` / `max_yaw_joystick` | `1.0` / `1.0` | 官方协议边界 |
+| `max_linear_x` / `max_linear_y` / `max_angular_z` | `3.7` / `1.0` / `3.0` | 启用限幅后的上限 |
+| `linear_deadband` / `angular_deadband` | `0.0` / `0.0` | 物理速度死区 |
 
-配置中没有横向速度参数，因为 Twist 模式的横向移动不可启用。
+`local_ip/local_port` 必须与机器人端 `/opt/export/config/sdk_config.yaml` 的 `target_ip/target_port` 一致。
 
 ## 6. 统一状态
 

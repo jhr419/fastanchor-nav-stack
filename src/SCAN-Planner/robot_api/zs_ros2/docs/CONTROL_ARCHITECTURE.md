@@ -1,26 +1,28 @@
 # GENISOM L1-W ROS2 Manager 架构
 
-## 1. 互斥运行与单一 SDK 所有权
+## 1. 运行入口与 SDK 后端
 
 ```text
 Nav2 / teleop / task nodes
         | ROS topic/service
         v
-二选一启动入口（禁止同时运行）
+二选一启动入口（现场建议互斥运行）
   ├── genisom_manager_node：完整控制、动作和遥测
-  └── genisom_twist_node：自动 SDK、仅前后/偏航速度
+  └── genisom_twist_node：旧 highlevel 直接速度
         |
         v
 受监督的工作子进程
   ├── ManagerNode 或 TwistNode
-  └── SdkWrapper：串行化本进程唯一 ZsibotExecutor
+  ├── SdkWrapper：串行化新版 SDK 调用
+  └── HighLevelVelocityClient：串行化旧 highlevel 速度调用
         |
         v
-官方 libzsibot.a -> UDP -> Firefly 192.168.168.168
+Manager: 官方 libzsibot.a -> UDP -> Firefly 192.168.168.168
+Twist: 旧 libmc_sdk_zsl_1w.so -> HighLevel::move -> Firefly
 ```
 
-两个自研目标可以同时安装，但运行时只能选择一个。官方示例仅用于 SDK 源码对照，不允许与任一 ROS2 控制
-节点同时启动。
+两个自研目标可以同时安装。现场运行时仍建议 Manager、Twist 和官方示例三者只启动一个，避免多进程同时给运动
+控制发速度。
 
 ## 2. 进程监督
 
@@ -91,7 +93,7 @@ Twist 已确认 SDK 后，只要 FunctionMode 变为任意非 `FM_SDK` 值，就
 
 ## 4. 速度桥安全门
 
-`/cmd_vel` 下发必须同时满足：
+Manager 模式的 `/cmd_vel` 下发必须同时满足：
 
 ```text
 connected
@@ -116,11 +118,15 @@ linear.y  -> joystick[2] 左右
 Manager 末端物理限幅。输出始终遵守官方 `[-1,1]` 协议边界。官方没有给出摇杆到物理速度曲线，因此标定增益
 必须通过实机测量确定。
 
-独立 Twist 模式使用相同的前进与偏航映射，但不读取 `linear.y`，并在构造 `NormalizedCommand` 时把
-`lateral` 固定为 `0.0`。因此上层导航器即使错误发布横向速度，也不能绕过 SDK 下发层约束。
+独立 Twist 模式不使用上述摇杆映射。它连接旧版 ZSL-1W highlevel 后端，收到一条 `/cmd_vel` 就立即调用一次：
 
-AUTO 下最近有效消息超过 `cmd_vel_timeout_ms` 后只发送一次零摇杆，清除 fresh 标记；下一条新消息可恢复，历史
-速度不会恢复。
+```text
+HighLevel::move(linear.x, linear.y, angular.z)
+```
+
+Twist 模式直接传递物理速度，不乘摇杆标定增益，不禁用 `linear.y`，不做 yaw 优先或 `linear.x/angular.z`
+互斥。Twist 模式也不启用 `cmd_vel_timeout_ms` 看门狗；停止发布后不会自动补发零速，停车必须由上游显式发布
+全零 `/cmd_vel`。
 
 ## 5. 姿态、档位和动作
 
@@ -174,7 +180,7 @@ Manager 锁存清除不表示机器人固件已恢复，原厂恢复由操作员
 | FaultInfo[] | `DiagnosticArray` |
 | Model、Version | latched String topics |
 
-所有 getter 通过同一个 `SdkWrapper::mutex_` 串行调用。Manager 当前使用单线程 ROS executor，互斥锁仍用于防止
+Manager 所有 getter 通过同一个 `SdkWrapper::mutex_` 串行调用。Manager 当前使用单线程 ROS executor，互斥锁仍用于防止
 未来 executor 调整破坏 SDK 的未声明线程安全边界。
 
 ## 8. 数据语义边界

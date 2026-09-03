@@ -70,8 +70,6 @@ struct RobotSnapshot
 
 NormalizedCommand convert_twist_to_normalized(
   double linear_x, double linear_y, double angular_z, const CommandLimits & limits);
-NormalizedCommand convert_twist_to_longitudinal(
-  double linear_x, double angular_z, const CommandLimits & limits);
 bool command_supported_for_model(zsibot::CmdCode command, zsibot::Model model);
 bool command_requires_lab_mode(zsibot::CmdCode command);
 bool velocity_bridge_may_send(

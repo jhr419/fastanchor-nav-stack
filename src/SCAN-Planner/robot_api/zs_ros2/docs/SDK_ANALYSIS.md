@@ -201,7 +201,7 @@ FM_SDK
 `example/sdk_control.cpp:164-178`。Manager 为四种模式分别提供 service，但只有 `FM_SDK` 允许速度桥下发；
 进入 GENERAL_SDK 或 ROAMERX 时遥测继续发布，速度桥保持关闭。
 
-## L1-W 运动控制 API
+## 新版 L1-W 运动控制 API
 
 高层运动接口实际仍命名为 `SetRemote`：
 
@@ -249,6 +249,26 @@ Manager 将限速和单位换算拆开：
 
 标定增益不代表官方保证的线性速度曲线。实际速度应读取 `GetSpeed()` 或外部里程计，在封闭场地逐级测量。
 
+### 旧版 ZSL-1W highlevel 直接速度接口
+
+旧版 `genisom_l1_sdk_old` 的 ZSL-1W highlevel 接口另提供：
+
+```cpp
+uint32_t move(const float vx, const float vy, const float yaw_rate);
+```
+
+文档 `third_party/genisom_l1_sdk_old/docs/api_zsl-1w.md` 将参数定义为前向速度 m/s、侧向速度 m/s 和绕 Z 轴角速度
+rad/s。`include/zsl-1w/highlevel.h` 与对应动态库也导出了该接口。
+
+因此独立 `genisom_twist_node` 已改为使用旧 highlevel 后端：
+
+```text
+/cmd_vel -> HighLevel::move(linear.x, linear.y, angular.z)
+```
+
+Twist 模式不再通过新版 `SetRemote()` 下发速度，也不再做归一化摇杆换算、yaw 优先互斥、固定频率重发或
+300 ms 超时清零。旧版 highlevel 没有新版 `GetFunctionMode()`，所以 Twist 模式无法确认遥控器接管状态。
+
 ## 机型识别与轮足约束
 
 `Model` 定义位于 `include/zsibot_sdk/zsibot_define.h:92-97`：
@@ -290,7 +310,8 @@ executor.SetCmd(zsibot::CmdCode::CMD_EMERGENCY_STOP);
 声明 noexcept，也没有列出各方法的具体异常条件，因此适配层在控制与查询边界捕获 `std::exception`。
 
 官方资料说明 SDK 内部有三个异步线程，但没有承诺 `ZsibotExecutor` 的公开方法可由多个调用线程并发调用。
-适配层在 `SdkWrapper` 中用一个互斥锁串行化所有 SDK getter 和 setter。ROS 默认使用单线程 executor，
+Manager 在 `SdkWrapper` 中用一个互斥锁串行化所有新版 SDK getter 和 setter。Twist 在
+`HighLevelVelocityClient` 中串行化旧 highlevel 连接、站立和 `move()` 调用。ROS 默认使用单线程 executor，
 互斥锁仍作为未来切换 executor 时的防护。
 
 ## 本轮没有修改官方 SDK

@@ -1,16 +1,17 @@
 # GENISOM L1-W ROS2 Manager
 
 面向 GENISOM L1-W 轮足机器人的 ROS2 Humble SDK 适配层。项目提供完整 Manager 和精简 Twist 控制两种
-互斥运行模式；任一时刻只能由其中一个进程持有官方 `ZsibotExecutor`。
+模式。Manager 使用新版 `ZsibotExecutor` 提供遥测和服务；Twist 模式参考旧版 ZSL-1W highlevel SDK，
+通过 `HighLevel::move(vx, vy, yaw_rate)` 直接下发 `/cmd_vel` 物理速度。
 
 完整使用说明见 `docs/USER_GUIDE.md`，SDK 依据见 `docs/SDK_ANALYSIS.md`，状态机设计见
 `docs/CONTROL_ARCHITECTURE.md`，实机验收项目见 `docs/TEST_PLAN.md`。
 
 ## 核心原则
 
-1. 整个部署同时只能运行一份官方 SDK 实例；Manager 与 Twist 节点不得同时启动。
+1. Manager 与 Twist 面向不同 SDK 后端，现场运行时仍建议二选一，避免多进程同时给运动控制发速度。
 2. Manager 模式启动后默认不抢控制权，速度桥默认关闭。
-3. Manager 只有在官方反馈 `FM_SDK` 且速度桥显式开启时才下发；Twist 模式还要求状态为 `ACTIVE`。
+3. Manager 只有在官方反馈 `FM_SDK` 且速度桥显式开启时才下发；Twist 模式要求 highlevel 已连接且状态为 `ACTIVE`。
 4. 切回 REMOTE 前先关闭速度桥、停车、清除历史速度，再请求并确认遥控控制权。
 5. 人工接管或断线重连后不自动抢回 SDK，不自动恢复旧速度。
 6. 遥测与控制权解耦，REMOTE、SDK、GENERAL_SDK、ROAMERX 下都持续发布状态数据。
@@ -35,21 +36,21 @@
 - 档位：慢速、正常、快速；
 - 动作：匍匐、爬高台、卸货下蹲及官方其他动作服务；
 - 型号保护：轮足自动拒绝跳跃、前跳、招手、后空翻、双腿站立；
-- 安全速度桥：显式 enable、可选 ROS 输入限幅、独立摇杆标定、SDK 协议边界和 300 ms watchdog；
+- Manager 安全速度桥：显式 enable、可选 ROS 输入限幅、独立摇杆标定、SDK 协议边界和 300 ms watchdog；
 - ESTOP：官方软急停和 Manager 锁存，恢复只释放 REMOTE；
 - 遥测：IMU、odom、16 关节、电池、速度、电机温度、型号、版本、故障；
 - 状态：`/genisom/status`、`/genisom/faults`、`/diagnostics`；
 - SDK 构造卡死保护：监督进程在 Ctrl+C 后 3 秒强制回收工作进程；
-- 独立 Twist 模式：启动后自动请求 SDK、站立并进入移动模式，直接接收 `/cmd_vel`；
-- Twist 轴约束：只接受 `linear.x` 和 `angular.z`，SDK 层永久将横向摇杆值置零；
-- 遥控器接管：SDK 控制权反馈离开 `FM_SDK` 后立即停止发送、禁止重新抢权并退出 SDK 连接。
+- 独立 Twist 模式：启动后连接旧版 highlevel、可选站立，直接接收 `/cmd_vel`；
+- Twist 速度下发：收到一条 `/cmd_vel` 立即调用一次 `HighLevel::move(linear.x, linear.y, angular.z)`；
+- Twist 不再做 yaw 优先、x/yaw 互斥、固定频率重发或 300 ms 超时清零。
 
 ## 验证边界
 
 | 项目 | 状态 |
 |---|---|
 | Manager 编译、launch/config 加载、GTest 和 lint | 已验证 |
-| Twist 节点编译、launch/config 安装、横移禁用和接管策略单测 | 已验证 |
+| Twist 节点编译、launch/config 安装、highlevel 速度映射单测 | 已验证 |
 | 官方 SDK 远端版本一致性 | 已验证 |
 | 旧版验证工具连接 Firefly 并识别 `XGWHSPD / FM_REMOTE` | 已实机验证 |
 | 新 Manager 的服务、遥测内容和动作效果 | 待 NUC 实机验证 |
@@ -78,14 +79,14 @@ colcon test-result --verbose
 当前本地结果：
 
 ```text
-61 tests, 0 errors, 0 failures, 11 skipped
+69 tests, 0 errors, 0 failures, 13 skipped
 ```
 
 跳过项来自 ROS2 Humble 对 cppcheck 2.7 的默认禁用策略。
 
 ## 启动
 
-当前 Firefly 地址默认为 `192.168.168.168:8081`，NUC 本地监听 UDP `8080`。
+Manager 当前 Firefly 地址默认为 `192.168.168.168:8081`，NUC 本地监听 UDP `8080`。
 
 ```bash
 ros2 launch genisom_l1_control manager.launch.py
@@ -99,19 +100,20 @@ ros2 topic echo /genisom/status
 
 ### 独立 Twist 控制模式
 
-不需要 Manager 的遥测和动作服务，只需要启动即进入 SDK 并接收速度时，使用：
+不需要 Manager 的遥测和动作服务，只需要直接执行 `/cmd_vel` 速度时，使用：
 
 ```bash
 ros2 launch genisom_l1_control twist.launch.py
 ```
 
-该启动方式会自动请求并确认 SDK 控制权、站立、进入移动模式，然后发布
-`/genisom/twist/ready=true`。它只执行 `/cmd_vel` 的 `linear.x` 和 `angular.z`，任何 `linear.y` 都会在
-SDK 层被强制置零。遥控器按原厂方式长按 `L2+R2+A` 两秒接管后，节点检测到 `FunctionMode` 离开 SDK，
-立即停止发送、退出并释放连接，且不会自动重新抢权。
+该启动方式会连接 `third_party/genisom_l1_sdk_old` 的 ZSL-1W highlevel 动态库，可选调用
+`standUp()`，然后发布 `/genisom/twist/ready=true`。收到一条 `/cmd_vel` 就立即调用一次
+`HighLevel::move(linear.x, linear.y, angular.z)`，不再走 `SetRemote()`、不再乘摇杆增益、不做
+`linear.x/angular.z` 互斥，也不启用 300 ms 超时清零。
 
-Manager 与 Twist 节点不能同时运行。遥控器组合键由底层固件识别，公开 SDK 没有按键接收回调；代码以
-`GetFunctionMode()==FM_REMOTE` 作为接管成功的唯一判据。
+使用 Twist 前，需要确认机器人端 `/opt/export/config/sdk_config.yaml` 的 `target_ip/target_port` 与
+`twist.yaml` 的 `local_ip/local_port` 一致。旧版 highlevel 接口没有新版 `FunctionMode` 反馈，因此 Twist
+状态不再把遥控器接管作为可确认事件。
 
 ## 最小控制流程
 

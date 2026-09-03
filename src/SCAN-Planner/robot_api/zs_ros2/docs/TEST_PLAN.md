@@ -68,8 +68,10 @@ ros2 run genisom_l1_control genisom_manager_node --ros-args \
 - 原厂遥控器和物理急停可用；
 - NUC `192.168.168.99/24` 到 Firefly `192.168.168.168` 直连可达；
 - UDP `8080` 没有旧进程占用；
+- Twist 模式使用旧版 highlevel 时，机器人端 `sdk_config.yaml` 的 `target_ip/target_port` 与
+  `twist.yaml` 的 `local_ip/local_port` 一致；
 - 不运行官方 example、旧 bridge 或其他 SDK 程序；
-- 第一次验证新映射时，先在规划器中保持低速，并临时把归一化摇杆上限设为 `0.10`；
+- 第一次验证新映射时，先在规划器中保持低速；
 - 每项测试记录时间、固件版本、型号、模式前后值和现场观测。
 
 ## 5. 连接与长期遥测
@@ -90,15 +92,15 @@ ros2 run genisom_l1_control genisom_manager_node --ros-args \
 
 状态：`PENDING-HW`。
 
-### T1.3 独立 Twist 启动与遥控器接管
+### T1.3 独立 Twist highlevel 启动
 
 只启动 `twist.launch.py`，等待 `/genisom/twist/ready=true`，以低速分别发送纯 `linear.x`、纯
-`angular.z` 和非零 `linear.y`。随后长按原厂遥控器 `L2+R2+A` 两秒。
+`angular.z`、非零 `linear.y`，以及 `linear.x + angular.z` 组合速度。
 
-预期：前后和偏航方向正确；非零 `linear.y` 不产生横移；接管后 FunctionMode 变为 REMOTE，节点退出、UDP
-8080 释放，且不自动重新申请 SDK。
+预期：状态包含 `sdk_backend=legacy_highlevel_move`；前后、横移和偏航方向正确；组合速度不会 yaw 优先抑制
+`linear.x`。
 
-状态：`PENDING-HW`。组合键由底层固件处理，公开 SDK 没有遥控器按键接收回调。
+状态：`PENDING-HW`。旧版 highlevel 没有新版 `FunctionMode` 反馈，Twist 不验证遥控器接管确认。
 
 ### T1.4 遥测坐标核对
 
@@ -168,19 +170,20 @@ SDK 低速运行时用原厂允许方式接回 REMOTE。
 
 自动策略已 `PASS-CODE`，物理效果 `PENDING-HW`。
 
-### T3.2 watchdog
+### T3.2 Twist 停发策略
 
-SDK 下启桥，10 Hz 发布 `linear.x=0.01`，随后停止。
+Twist ready 后发布一次 `linear.x=0.01`，随后停止发布。
 
-预期：停止后约 300 ms 发零摇杆，机器人停车；新消息可恢复，旧消息不恢复。
+预期：节点只在收到消息时调用 `HighLevel::move()`；停止发布后不会在 300 ms 自动补发零速。上游发布全零
+`/cmd_vel` 后机器人停车。
 
 状态：`PENDING-HW`。
 
 ### T3.3 方向和速度标定
 
-按 `0.01 -> 0.02 -> 0.03` 逐级测试前后、横移、旋转，并记录 GetSpeed 与外部测量。
+按 `0.01 -> 0.02 -> 0.03` 逐级测试前后、横移、旋转，并记录 highlevel 反馈速度与外部测量。
 
-预期：建立每个速度档的死区和摇杆到 m/s、rad/s 曲线。标定前不提高默认上限。
+预期：建立 highlevel `move(vx, vy, yaw_rate)` 的实际速度响应、低速死区和方向符号。标定前不提高默认上限。
 
 状态：`PENDING-HW`。
 
