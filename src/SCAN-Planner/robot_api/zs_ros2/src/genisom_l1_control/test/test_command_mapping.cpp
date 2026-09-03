@@ -6,7 +6,7 @@
 namespace genisom_l1_control
 {
 
-TEST(CommandMapping, MapsRosAxesToOfficialJoystickOrder)
+TEST(CommandMapping, MapsRosAxesToSemanticCommand)
 {
   CommandLimits limits;
   const auto command = convert_twist_to_normalized(0.05, -0.025, 0.10, limits);
@@ -14,6 +14,18 @@ TEST(CommandMapping, MapsRosAxesToOfficialJoystickOrder)
   EXPECT_FLOAT_EQ(command.forward, 0.05F);
   EXPECT_FLOAT_EQ(command.yaw, 0.05F);
   EXPECT_FLOAT_EQ(command.lateral, -0.05F);
+}
+
+TEST(CommandMapping, SerializesUsingVerifiedL1ChannelOrder)
+{
+  const NormalizedCommand command{0.10F, 0.20F, 0.30F};
+
+  const auto joystick = normalized_command_to_joystick(command);
+
+  EXPECT_FLOAT_EQ(joystick[0], 0.10F);
+  EXPECT_FLOAT_EQ(joystick[1], 0.30F);
+  EXPECT_FLOAT_EQ(joystick[2], 0.20F);
+  EXPECT_FLOAT_EQ(joystick[3], 0.0F);
 }
 
 TEST(CommandMapping, ClampsPhysicalAndJoystickLimits)

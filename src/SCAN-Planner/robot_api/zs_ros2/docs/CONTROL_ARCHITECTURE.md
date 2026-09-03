@@ -107,10 +107,12 @@ AND GetFunctionMode() == FM_SDK
 
 ```text
 linear.x  -> joystick[0] 前后
-angular.z -> joystick[1] 旋转
-linear.y  -> joystick[2] 左右
+linear.y  -> joystick[1] 左右
+angular.z -> joystick[2] 旋转
 0         -> joystick[3] 头部角度
 ```
+
+以上顺序来自 L1 实机验证；随附 SDK 协议文档对 `joystick[1]`、`joystick[2]` 的说明与实机行为相反。
 
 默认由导航器/规划器限制 ROS 物理速度，Manager 使用独立标定增益映射到归一化摇杆；也可通过参数重新启用
 Manager 末端物理限幅。输出始终遵守官方 `[-1,1]` 协议边界。官方没有给出摇杆到物理速度曲线，因此标定增益

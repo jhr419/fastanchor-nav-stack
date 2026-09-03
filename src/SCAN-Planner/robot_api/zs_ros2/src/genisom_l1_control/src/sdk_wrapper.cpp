@@ -101,6 +101,13 @@ NormalizedCommand convert_twist_to_longitudinal(
     0.0F};
 }
 
+std::array<zsibot::float32_t, 4> normalized_command_to_joystick(
+  const NormalizedCommand & command)
+{
+  // L1 实机通道顺序为前后、横移、旋转、头部角度，与随附协议文档中的后两项相反。
+  return {command.forward, command.lateral, command.yaw, 0.0F};
+}
+
 bool command_supported_for_model(zsibot::CmdCode command, zsibot::Model model)
 {
   if (model == zsibot::Model::MODEL_XG) {
@@ -251,8 +258,7 @@ void SdkWrapper::send_command(zsibot::CmdCode command)
 void SdkWrapper::send_normalized(const NormalizedCommand & command)
 {
   std::lock_guard<std::mutex> lock(mutex_);
-  const std::array<zsibot::float32_t, 4> joystick{
-    command.forward, command.yaw, command.lateral, 0.0F};
+  const auto joystick = normalized_command_to_joystick(command);
   executor_->SetRemote(joystick, std::array<zsibot::float32_t, 14>{});
 }
 
