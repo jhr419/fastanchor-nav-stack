@@ -1591,6 +1591,8 @@ private:
     declare_parameter<double>("start_replan_min_distance", 0.30);
     declare_parameter<double>("start_replan_min_interval_sec", 1.0);
     declare_parameter<double>("start_replan_goal_tolerance", 0.35);
+    declare_parameter<bool>("clear_goal_on_reach", true);
+    declare_parameter<double>("goal_reached_tolerance", 0.15);
     declare_parameter<double>("goal_replan_min_distance", 0.10);
     declare_parameter<double>("goal_replan_min_z_distance", 0.20);
     declare_parameter<double>("goal_replan_min_interval_sec", 0.75);
@@ -1702,6 +1704,9 @@ private:
       std::max(0.0, get_parameter("start_replan_min_interval_sec").as_double());
     start_replan_goal_tolerance_ =
       std::max(0.0, get_parameter("start_replan_goal_tolerance").as_double());
+    clear_goal_on_reach_ = get_parameter("clear_goal_on_reach").as_bool();
+    goal_reached_tolerance_ =
+      std::max(0.0, get_parameter("goal_reached_tolerance").as_double());
     goal_replan_min_distance_ =
       std::max(0.0, get_parameter("goal_replan_min_distance").as_double());
     goal_replan_min_z_distance_ =
@@ -1796,11 +1801,18 @@ private:
     }
 
     status_timer_ = create_wall_timer(1s, [this]() {publishStatus();});
-    if (replan_on_start_update_ && start_replan_check_frequency_ > 0.0) {
+    if ((replan_on_start_update_ || clear_goal_on_reach_) &&
+      start_replan_check_frequency_ > 0.0)
+    {
       const auto period = std::chrono::duration_cast<std::chrono::nanoseconds>(
         std::chrono::duration<double>(1.0 / start_replan_check_frequency_));
       start_replan_timer_ = create_wall_timer(
-        period, [this]() {maybeReplanFromStartUpdate("start_update_timer");});
+        period,
+        [this]() {
+          if (!clearActiveGoalIfReached("start_update_timer")) {
+            maybeReplanFromStartUpdate("start_update_timer");
+          }
+        });
     }
   }
 
@@ -1808,6 +1820,9 @@ private:
   {
     last_odom_ = *msg;
     if (start_source_ == "odom") {
+      if (clearActiveGoalIfReached("odom")) {
+        return;
+      }
       maybeReplanFromStartUpdate("odom");
     }
   }
@@ -1816,6 +1831,9 @@ private:
   {
     last_start_pose_ = *msg;
     if (start_source_ == "topic" || start_source_ == "manual") {
+      if (clearActiveGoalIfReached("start_pose")) {
+        return;
+      }
       maybeReplanFromStartUpdate("start_pose");
     }
   }
@@ -1943,7 +1961,13 @@ private:
       RCLCPP_WARN(get_logger(), "A* plan request ignored because a plan is already running.");
       return false;
     }
+    const bool is_new_goal = !active_goal_.has_value() ||
+      (active_goal_.value() - goal).norm() > 1.0e-6;
     active_goal_ = goal;
+    if (is_new_goal) {
+      active_goal_has_path_ = false;
+      last_planned_start_.reset();
+    }
     planning_in_progress_ = true;
     const auto guard = std::shared_ptr<void>(nullptr, [this](void *) {planning_in_progress_ = false;});
 
@@ -1995,6 +2019,7 @@ private:
     publishDebug(start, goal, path, metrics, "");
     publishDebugMarkers(path);
     pending_goal_.reset();
+    active_goal_has_path_ = true;
     last_planned_start_ = start;
     last_start_replan_attempt_time_ = now();
     RCLCPP_INFO(
@@ -2003,6 +2028,44 @@ private:
       path.size(), metrics.length, metrics.min_clearance, metrics.avg_clearance,
       adapter_.lastExpandedNodes(), adapter_.lastPlanningTimeSec() * 1000.0);
     setStatus("SUCCESS");
+    return true;
+  }
+
+  bool clearActiveGoalIfReached(const std::string & trigger)
+  {
+    if (!clear_goal_on_reach_ || !active_goal_.has_value() ||
+      !active_goal_has_path_ || planning_in_progress_)
+    {
+      return false;
+    }
+
+    Eigen::Vector3d start;
+    if (!getCurrentStart(start)) {
+      return false;
+    }
+
+    const Eigen::Vector3d completed_goal = *active_goal_;
+    const double distance_to_goal =
+      (completed_goal.head<2>() - start.head<2>()).norm();
+    if (distance_to_goal > goal_reached_tolerance_) {
+      return false;
+    }
+
+    active_goal_.reset();
+    pending_goal_.reset();
+    last_planned_start_.reset();
+    last_goal_request_.reset();
+    active_goal_has_path_ = false;
+    last_start_replan_attempt_time_ = rclcpp::Time(0, 0, get_clock()->get_clock_type());
+    last_goal_request_time_ = rclcpp::Time(0, 0, get_clock()->get_clock_type());
+    clearPublishedPath();
+
+    RCLCPP_INFO(
+      get_logger(),
+      "A* goal reached and cleared: trigger=%s distance=%.3fm tolerance=%.3fm goal=[%.3f, %.3f, %.3f]",
+      trigger.c_str(), distance_to_goal, goal_reached_tolerance_,
+      completed_goal.x(), completed_goal.y(), completed_goal.z());
+    setStatus("GOAL_REACHED");
     return true;
   }
 
@@ -2388,6 +2451,25 @@ private:
     marker_pub_->publish(marker);
   }
 
+  void clearPublishedPath()
+  {
+    const builtin_interfaces::msg::Time stamp = now();
+    nav_msgs::msg::Path empty_path;
+    empty_path.header.stamp = stamp;
+    empty_path.header.frame_id = map_frame_;
+    path_pub_->publish(empty_path);
+    if (alias_path_pub_) {
+      alias_path_pub_->publish(empty_path);
+    }
+
+    visualization_msgs::msg::Marker marker;
+    marker.header = empty_path.header;
+    marker.ns = "astar_global_path";
+    marker.id = 0;
+    marker.action = visualization_msgs::msg::Marker::DELETE;
+    marker_pub_->publish(marker);
+  }
+
   void publishDebug(
     const Eigen::Vector3d & start,
     const Eigen::Vector3d & goal,
@@ -2552,6 +2634,8 @@ private:
   double start_replan_min_distance_{0.30};
   double start_replan_min_interval_sec_{1.0};
   double start_replan_goal_tolerance_{0.35};
+  bool clear_goal_on_reach_{true};
+  double goal_reached_tolerance_{0.15};
   double goal_replan_min_distance_{0.10};
   double goal_replan_min_z_distance_{0.20};
   double goal_replan_min_interval_sec_{0.75};
@@ -2588,6 +2672,7 @@ private:
   bool publish_debug_markers_{true};
   double marker_line_width_{0.08};
   bool planning_in_progress_{false};
+  bool active_goal_has_path_{false};
   std::string status_{"IDLE"};
   std::optional<nav_msgs::msg::Odometry> last_odom_;
   std::optional<geometry_msgs::msg::PoseStamped> last_start_pose_;

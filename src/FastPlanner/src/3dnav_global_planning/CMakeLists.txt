@@ -53,4 +53,9 @@ install(DIRECTORY launch config DESTINATION share/${PROJECT_NAME})
 install(DIRECTORY launch DESTINATION share/3dnav_global_planning)
 install(FILES resource/3dnav_global_planning DESTINATION share/ament_index/resource_index/packages)
 
+if(BUILD_TESTING)
+  find_package(launch_testing_ament_cmake REQUIRED)
+  add_launch_test(test/test_goal_clear_on_reach.py TIMEOUT 30)
+endif()
+
 ament_package()

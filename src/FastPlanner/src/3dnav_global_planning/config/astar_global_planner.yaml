@@ -15,6 +15,8 @@ astar_global_planner_node:
     start_replan_min_distance: 0.30
     start_replan_min_interval_sec: 1.0
     start_replan_goal_tolerance: 0.35
+    clear_goal_on_reach: true
+    goal_reached_tolerance: 0.15
     goal_replan_min_distance: 0.10
     goal_replan_min_z_distance: 0.20
     goal_replan_min_interval_sec: 0.75

@@ -65,11 +65,38 @@ Waypoint Action 到达最后一个目标点后虽然已经返回成功，但闭�
 
 暂停仍会保留任务路径点索引。恢复时现有逻辑会重新启用 SCAN，并重新发布当前路径点以生成全新轨迹。新的 Action 开始时也会重新启用 SCAN。
 
+### 5. 单目标到达后清除 A* 活动目标和缓存路径
+
+仅释放闭环控制器中的最后一条 B-spline 仍然不够。A* 原来会一直保存 `active_goal_`，并在机器人被移出旧目标点后根据起点变化重新规划；全局路径裁剪节点也会持续发布缓存的旧路径。
+
+修改：
+
+- `src/FastPlanner/src/3dnav_global_planning/src/astar_global_planner_node.cpp`
+- `src/FastPlanner/src/3dnav_global_planning/config/astar_global_planner.yaml`
+- `src/SCAN-Planner/planner/plan_manage/src/global_path_window_node.cpp`
+
+A* 现在只对已经成功发布过路径的活动目标执行到达判定。当机器人 XY 位置进入 `goal_reached_tolerance` 后，会：
+
+- 清除 `active_goal_`、待规划目标和上次规划起点；
+- 清除目标请求去重状态，允许之后重新发送同一坐标；
+- 发布空的全局路径，覆盖持久化的旧路径；
+- 删除 RViz 中的 A* 全局路径标记；
+- 将状态设置为 `GOAL_REACHED`。
+
+全局路径裁剪节点收到空全局路径后会同步发布一次空局部路径并停止更新，从而保证旧路径不会继续进入 SCAN-Planner。到达后再手动移开机器人，不会重新规划到已经完成的目标。
+
+新增参数：
+
+```yaml
+clear_goal_on_reach: true
+goal_reached_tolerance: 0.15
+```
+
 ## 到达阈值说明
 
 Waypoint Action 使用 `xy_tolerance` 和 `hold_time` 判断任务完成。Action 满足该条件后会立即取消控制轨迹，因此实际任务结束精度由这些参数决定。
 
-闭环控制器的 `finish_dist` 用于没有 Action 参与时的轨迹自动释放。若需要 Action 与单目标模式具有相同的到达精度，应将 `waypoint_xy_tolerance` 与 `finish_dist` 配置为相同或相近的值。
+闭环控制器的 `finish_dist` 用于没有 Action 参与时的轨迹自动释放。A* 单目标模式使用 `goal_reached_tolerance` 清除全局活动目标。当前两个参数均为 `0.15 m`，应保持相同或相近，避免全局目标和局部轨迹使用明显不同的完成范围。
 
 ## 回归测试
 
@@ -80,12 +107,14 @@ Waypoint Action 使用 `xy_tolerance` 和 `hold_time` 判断任务完成。Actio
 - 取消后发布新轨迹可以重新启动控制。
 - 静止轨迹正常完成后会自动释放，随后移动里程计位置也不会恢复旧目标跟踪。
 - `HOLD` 轨迹结束后仍保持目标，用于验证紧急停车的位置保持语义没有被削弱。
+- 空全局路径会同步清除路径裁剪节点的局部路径缓存。
+- A* 进入 `0.15 m` 到达范围后会发布空路径和 `GOAL_REACHED`，移出目标点后不会重新规划旧目标。
 
 建议构建命令：
 
 ```bash
 source /opt/ros/humble/setup.bash
-colcon build --symlink-install --packages-select scan_planner_msgs scan_planner navigation_bringup
+colcon build --symlink-install --packages-select scan_planner_msgs scan_planner nav3d_global_planning navigation_bringup
 ```
 
 建议测试命令：
@@ -93,7 +122,7 @@ colcon build --symlink-install --packages-select scan_planner_msgs scan_planner 
 ```bash
 source /opt/ros/humble/setup.bash
 source install/setup.bash
-colcon test --packages-select scan_planner navigation_bringup --event-handlers console_direct+
+colcon test --packages-select scan_planner nav3d_global_planning navigation_bringup --event-handlers console_direct+
 colcon test-result --verbose
 ```
 

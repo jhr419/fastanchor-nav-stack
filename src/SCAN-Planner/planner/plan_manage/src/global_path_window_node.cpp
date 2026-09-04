@@ -318,25 +318,37 @@ private:
 
     const uint64_t new_signature = computePathSignature(*msg);
 
-    std::lock_guard<std::mutex> lock(path_mutex_);
+    bool cleared = false;
 
-    const bool changed =
-      !have_global_path_ ||
-      new_signature != path_signature_;
+    {
+      std::lock_guard<std::mutex> lock(path_mutex_);
 
-    global_path_ = *msg;
-    path_signature_ = new_signature;
-    have_global_path_ = true;
+      const bool changed =
+        !have_global_path_ ||
+        new_signature != path_signature_;
 
-    if (changed) {
-      last_nearest_index_ = 0;
-      have_progress_ = false;
+      global_path_ = *msg;
+      path_signature_ = new_signature;
+      have_global_path_ = true;
+      cleared = msg->poses.empty();
 
-      RCLCPP_INFO(
-        this->get_logger(),
-        "Received new global path: %zu points, frame=%s",
-        msg->poses.size(),
-        msg->header.frame_id.c_str());
+      if (changed) {
+        last_nearest_index_ = 0;
+        have_progress_ = false;
+
+        RCLCPP_INFO(
+          this->get_logger(),
+          "Received new global path: %zu points, frame=%s",
+          msg->poses.size(),
+          msg->header.frame_id.c_str());
+      }
+    }
+
+    if (cleared) {
+      nav_msgs::msg::Path empty_path;
+      empty_path.header = msg->header;
+      empty_path.header.stamp = this->now();
+      local_path_pub_->publish(empty_path);
     }
   }
 
