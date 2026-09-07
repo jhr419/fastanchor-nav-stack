@@ -12,8 +12,10 @@ if (($# > 0)); then
 fi
 
 source_workspace
+unset RMW_IMPLEMENTATION
 banner "${NAV_STAGE_INDEX:-01}" "${NAV_STAGE_TOTAL:-01}" "智身 L1 速度桥"
 wait_for_topic "/cmd_vel" "导航速度指令"
+echo "ROS 2 RMW: 系统默认"
 echo "启动智身 L1 速度桥。请确保遥控器可随时接管或急停。"
 
 command=(ros2 launch genisom_l1_control twist.launch.py)

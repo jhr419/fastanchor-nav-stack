@@ -34,6 +34,14 @@ ROS 包的 `launch/` 与 `config/` 保留在各包内。这样 `ament` 安装后
 
 底盘、规划器和定位器自身的业务参数仍由对应 ROS 包的 YAML 管理。
 
+## 通信中间件隔离
+
+Go2 运行配置要求全部 ROS 2 进程使用 `rmw_cyclonedds_cpp`，多终端启动时由
+`start_all.sh` 向所有标签页统一注入。单独启动 Go2 速度桥时，由公共环境函数设置。
+
+智身 L1 不依赖该 RMW。智身和无底盘模式会清除继承的 `RMW_IMPLEMENTATION`，
+使用 ROS 2 系统默认值，避免 Unitree 环境污染其他底盘配置。
+
 ## 进程管理
 
 模块启动前将 PID、Linux 进程启动时间和模块名写入 `user/.run/`。停止时同时校验 PID 与启动时间，避免 PID 被系统复用后误停无关进程。

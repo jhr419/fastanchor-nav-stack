@@ -22,6 +22,7 @@ Livox MID360/MID360s
 - LIO：FAST-LIO2
 - 局部目标距离：`4.0 m`
 - 底盘：智身 L1
+- Go2 RMW：`rmw_cyclonedds_cpp`
 
 ## 2. 环境要求
 
@@ -114,6 +115,11 @@ source user/setup_env.sh
 - `--lio-backend fastlio2|yifanlio`
 - `--rviz` 或 `--no-rviz`
 
+使用 `--robot go2` 时，所有启动标签页都会设置
+`RMW_IMPLEMENTATION=rmw_cyclonedds_cpp`。使用 `--robot zs` 或
+`--robot none` 时会清除该变量，使用系统默认 RMW，防止继承终端中残留的
+Unitree 通信环境。
+
 额外的 ROS launch 参数放在 `--` 后面：
 
 ```bash
@@ -160,6 +166,8 @@ Go2 使用：
 ```bash
 ./user/start_go2_bridge.sh
 ```
+
+Go2 桥接脚本会自行设置 `RMW_IMPLEMENTATION=rmw_cyclonedds_cpp`；智身桥接脚本会自行清除该变量。
 
 启动可视化：
 
@@ -269,11 +277,11 @@ ros2 topic list
 
 ### 智身 L1 不接受控制
 
-检查主机和 `192.168.168.168` 的网络连接、SDK 端口、遥控器控制权以及 `twist.yaml`。不要通过反复重启自动抢占遥控器控制权。
+检查主机和 `192.168.168.168` 的网络连接、SDK 端口、遥控器控制权以及 `twist.yaml`。智身启动脚本不使用 Unitree 所需的 `rmw_cyclonedds_cpp`，不要通过反复重启自动抢占遥控器控制权。
 
 ### Go2 无法通信
 
-确认 Unitree 网络接口配置，并保证所有终端使用相同的 `ROS_DOMAIN_ID`。Go2 脚本会自动设置 `rmw_cyclonedds_cpp`。
+确认 Unitree 网络接口配置，并保证所有终端使用相同的 `ROS_DOMAIN_ID`。Go2 模式会为全部启动标签页设置 `RMW_IMPLEMENTATION=rmw_cyclonedds_cpp`，单独启动 Go2 桥接时也会自动设置。
 
 ## 13. 修改同步要求
 

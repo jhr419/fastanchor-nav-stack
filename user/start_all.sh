@@ -102,10 +102,17 @@ echo "终端数量: $total"
 echo "============================================================"
 
 terminal_args=()
+middleware_command=(env)
+if [[ "$robot" == "go2" ]]; then
+  middleware_command+=("RMW_IMPLEMENTATION=$NAV_GO2_RMW_IMPLEMENTATION")
+else
+  middleware_command+=(-u RMW_IMPLEMENTATION)
+fi
+
 for ((index = 0; index < total; ++index)); do
   number=$(printf '%02d' "$((index + 1))")
   title="$number ${module_titles[index]}"
-  command="env NAV_STAGE_INDEX=$number NAV_STAGE_TOTAL=$(printf '%02d' "$total") ${module_commands[index]}"
+  command="$(shell_join "${middleware_command[@]}")NAV_STAGE_INDEX=$number NAV_STAGE_TOTAL=$(printf '%02d' "$total") ${module_commands[index]}"
   payload="cd $(printf '%q' "$PROJECT_WS"); $command; result=\$?; echo; echo '[$title] 已退出，状态码:' \$result; exec bash"
   terminal_command="bash -lc $(printf '%q' "$payload")"
 

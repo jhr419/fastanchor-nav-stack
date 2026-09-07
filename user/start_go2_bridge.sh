@@ -14,6 +14,7 @@ fi
 source_go2_environment
 banner "${NAV_STAGE_INDEX:-01}" "${NAV_STAGE_TOTAL:-01}" "Unitree Go2 速度桥"
 wait_for_topic "/cmd_vel" "导航速度指令"
+echo "ROS 2 RMW: $RMW_IMPLEMENTATION"
 echo "启动 Unitree Go2 速度桥。请确保遥控器可随时接管或急停。"
 
 command=(ros2 launch go2_twist_bridge twist_bridge.launch.py)

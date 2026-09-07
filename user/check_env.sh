@@ -47,6 +47,17 @@ check_file()
   fi
 }
 
+check_ros_package()
+{
+  local package_name="$1"
+  if ros2 pkg prefix "$package_name" >/dev/null 2>&1; then
+    echo "[正常] ROS 2 包: $package_name"
+  else
+    echo "[缺失] ROS 2 包: $package_name"
+    failures=$((failures + 1))
+  fi
+}
+
 check_command bash
 check_command colcon
 check_file "/opt/ros/$NAV_ROS_DISTRO/setup.bash" "ROS 2 环境"
@@ -63,6 +74,7 @@ if [[ "$robot" == "zs" ]]; then
   check_file "$PROJECT_WS/src/SCAN-Planner/robot_api/zs_ros2/src/genisom_l1_control/config/twist.yaml" "智身 L1 配置"
 elif [[ "$robot" == "go2" ]]; then
   check_file "$PROJECT_WS/src/SCAN-Planner/robot_api/unitree_ros2/setup_default.sh" "Unitree 环境"
+  check_ros_package "$NAV_GO2_RMW_IMPLEMENTATION"
 fi
 
 if ((failures > 0)); then
