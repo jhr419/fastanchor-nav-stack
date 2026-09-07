@@ -1,3 +1,5 @@
-unset ROS_DOMAIN_ID
-source ./src/SCAN-Planner/robot_api/unitree_ros2/setup_default.sh
-source ./install/setup.bash
+#!/usr/bin/env bash
+
+# 保留旧入口；新的统一环境入口位于 user/setup_env.sh。
+SETUP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SETUP_DIR/user/setup_env.sh"

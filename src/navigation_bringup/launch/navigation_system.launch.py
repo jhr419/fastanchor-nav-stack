@@ -35,6 +35,7 @@ def generate_launch_description():
     runtime_log_csv_path = LaunchConfiguration("runtime_log_csv_path")
     cmd_vel_topic = LaunchConfiguration("cmd_vel_topic")
     waypoints_file = LaunchConfiguration("waypoints_file")
+    lio_backend = LaunchConfiguration("lio_backend")
 
     fast_anchor_launch = PathJoinSubstitution([
         FindPackageShare("fast_anchor_bringup"),
@@ -173,6 +174,12 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument("controller_mode", default_value="closed_loop"),
         DeclareLaunchArgument(
+            "lio_backend",
+            default_value="fastlio2",
+            choices=["fastlio2", "yifanlio"],
+            description="LIO frontend used by FastAnchor",
+        ),
+        DeclareLaunchArgument(
             "lidar_model",
             default_value="mid360s",
             choices=["mid360", "mid360s"],
@@ -210,6 +217,7 @@ def generate_launch_description():
                 "aligned_cloud_publish_rate_hz": aligned_cloud_publish_rate_hz,
                 "path_publish_interval_s": path_publish_interval_s,
                 "lidar_model": LaunchConfiguration("lidar_model"),
+                "lio_backend": lio_backend,
                 "start_livox_driver": LaunchConfiguration("start_livox_driver"),
                 "start_fastlio": LaunchConfiguration("start_fastlio"),
                 "start_fastlio_rviz": "false",

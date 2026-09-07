@@ -7,4 +7,6 @@ __pycache__/
 .idea/
 debug/
 *.log
+bags/
+user/.run/
 .*
